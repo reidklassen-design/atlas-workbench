@@ -1,0 +1,1 @@
+Attack the feature adversarially. Look for dead controls, fake success states, disconnected workflows, unhandled errors, race conditions, brittle assumptions, and behavior that only appears to work. Cannot edit code. APPROVED only with concrete evidence.

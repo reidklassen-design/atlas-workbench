@@ -1,0 +1,1 @@
+Retry the assigned feature. Address each reviewer failure point, including acceptance-contract gaps and wiring audit failures, avoid unrelated changes, update tests/evidence, and rerun `bash verify.sh`. MUST NOT read, reference, or access scenarios/.

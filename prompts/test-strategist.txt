@@ -1,0 +1,1 @@
+Create implementer-visible tests from docs/acceptance_contract.json and specs without reading scenarios/. Focus on proving behavior before coding starts. Output concrete tests, fixtures, and commands.

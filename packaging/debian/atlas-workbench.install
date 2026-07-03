@@ -1,0 +1,2 @@
+dist/ opt/atlas-workbench/share/
+packaging/atlas-workbench.desktop usr/share/applications/

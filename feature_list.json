@@ -1,0 +1,72 @@
+[
+  {
+    "id": "server-control",
+    "name": "Server Control Tab",
+    "description": "A tab where the user starts and stops the llama.cpp server, configures host and port, and sees real-time server stdout/stderr in a log panel.",
+    "priority": "high",
+    "status": "done",
+    "dependencies": [
+      "binary-config"
+    ]
+  },
+  {
+    "id": "model-management",
+    "name": "Model Management Tab",
+    "description": "A tab where the user browses for GGUF model files, loads a model into the server, and unloads it.",
+    "priority": "high",
+    "status": "done",
+    "dependencies": [
+      "server-control",
+      "binary-config"
+    ]
+  },
+  {
+    "id": "settings-flags",
+    "name": "Settings & Flags Tab",
+    "description": "A tab exposing every llama.cpp server flag as a modern widget — dropdowns, sliders, toggles, and text inputs — organized in a clean layout.",
+    "priority": "high",
+    "status": "done",
+    "dependencies": [
+      "server-control"
+    ]
+  },
+  {
+    "id": "fine-tuning",
+    "name": "Fine-Tuning Tab",
+    "description": "A tab where the user configures and runs llama.cpp fine-tuning with form controls for dataset path, learning rate, epochs, output path, and other training parameters.",
+    "priority": "high",
+    "status": "done",
+    "dependencies": [
+      "binary-config"
+    ]
+  },
+  {
+    "id": "system-monitor",
+    "name": "System Monitor Tab",
+    "description": "A tab showing real-time CPU, RAM, and GPU usage metrics so the user can see exactly what is happening with their system while the server or training runs.",
+    "priority": "medium",
+    "status": "done",
+    "dependencies": []
+  },
+  {
+    "id": "binary-config",
+    "name": "Binary Configuration & First Launch",
+    "description": "On first launch, the app detects whether the llama.cpp binary path is configured. If not, it prompts the user to locate the server and finetune binaries, validates they are executable, and persists the paths.",
+    "priority": "high",
+    "status": "done",
+    "dependencies": []
+  },
+  {
+    "id": "error-handling",
+    "name": "Error Handling & Recovery",
+    "description": "A cross-cutting feature ensuring that every process failure, missing file, invalid configuration, or crash surfaces as a clear in-app error message in plain language, allowing the user to fix the issue and retry.",
+    "priority": "high",
+    "status": "done",
+    "dependencies": [
+      "server-control",
+      "model-management",
+      "fine-tuning",
+      "binary-config"
+    ]
+  }
+]

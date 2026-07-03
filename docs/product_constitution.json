@@ -1,0 +1,169 @@
+{
+  "project": {
+    "slug": "atlas-workbench",
+    "name": "Atlas Workbench",
+    "purpose": "A modern Linux desktop control panel that wraps the user's existing llama.cpp binary, exposing every server flag, model operation, and fine-tuning parameter through clean widgets instead of command-line memorization."
+  },
+  "thesis": "Atlas Workbench is a professional Linux desktop control panel that gives you every llama.cpp capability — server, models, settings, fine-tuning, monitoring — through clean modern widgets, with zero command-line memorization.",
+  "excellent_outcome": "I open Atlas Workbench, browse to my GGUF model, click Start, watch the server come alive in the log panel, tweak every flag through dropdowns and sliders, fine-tune a model with form controls, monitor my hardware in real time, and when something breaks I get a clear message telling me exactly what to fix — all without ever touching a terminal.",
+  "unacceptable_outcomes": [
+    "Any llama.cpp flag that is not exposed as a widget, forcing the user back to the terminal",
+    "Fine-tuning runs but produces no usable model or fails without a clear error message",
+    "The UI looks dated, unprofessional, or uses legacy widget aesthetics",
+    "The server process crashes or hangs and the user receives no feedback",
+    "Settings do not persist between sessions"
+  ],
+  "non_negotiable_promises": [
+    "Every llama.cpp server flag is controllable through a GUI widget — no terminal needed for any flag",
+    "Fine-tuning must complete end-to-end and produce a trained model file at the specified output path",
+    "Errors are always shown as clear in-app messages in plain language, never silently swallowed",
+    "Settings persist between sessions via a config file",
+    "The app is distributed as a .deb or AppImage and appears in the Linux app menu"
+  ],
+  "user_workflows": [
+    {
+      "name": "Start server with a loaded model",
+      "trigger": "User selects a GGUF model file, configures server settings, and clicks Start",
+      "happy_path": "The app launches the llama.cpp server binary as a child process with the selected model and all configured flags, the server starts successfully, the log panel shows stdout/stderr output, and the System Monitor tab begins showing real-time metrics",
+      "proof": "Scenario test: select model, set port and host, click Start, assert server process is running, assert log panel shows server startup output, assert server responds on the configured port"
+    },
+    {
+      "name": "Fine-tune a model",
+      "trigger": "User navigates to the Fine-tuning tab, selects a dataset, sets learning rate and epochs, specifies an output path, and clicks Start Training",
+      "happy_path": "The app launches the llama.cpp finetune binary with all specified parameters, training progresses, and a trained model file is produced at the output path",
+      "proof": "Scenario test: configure finetune parameters, start training, assert process runs, assert output model file exists at the specified path after completion"
+    },
+    {
+      "name": "Recover from an error",
+      "trigger": "User points to a nonexistent model file or the server crashes mid-run",
+      "happy_path": "The app shows a clear in-app error message in plain language explaining what went wrong, the user fixes the issue, and retries successfully",
+      "proof": "Scenario test: point to a nonexistent GGUF file, click Start, assert a visible error message appears, fix the path, click Start again, assert server starts"
+    }
+  ],
+  "assumptions": [
+    {
+      "assumption": "The user has a working llama.cpp build with both the server and finetune binaries available on their Linux machine",
+      "risk": "If the binary is missing or broken, the app cannot function and must detect and report this clearly",
+      "validation": "On first launch, the app checks that the configured binary path exists and is executable; if not, it prompts the user to locate it with a clear message"
+    },
+    {
+      "assumption": "The llama.cpp server and finetune binaries accept flags via command-line arguments that can be mapped to widgets",
+      "risk": "If llama.cpp changes its flag interface, widgets may pass invalid arguments",
+      "validation": "Integration test: launch the server with a representative set of flags and verify it starts without error; document the llama.cpp version the app is tested against"
+    },
+    {
+      "assumption": "GPU metrics are readable on Linux via sysinfo or a similar mechanism",
+      "risk": "If GPU monitoring is not available, the System Monitor tab may show incomplete data",
+      "validation": "Test on a machine with and without a GPU; if GPU metrics are unavailable, show a clear 'GPU not detected' message instead of a blank panel"
+    },
+    {
+      "assumption": "GGUF model files are stored in a user-specified directory that the app can browse",
+      "risk": "If the directory is invalid or inaccessible, model browsing fails silently",
+      "validation": "Test with a valid directory, an empty directory, and a nonexistent path; each must produce appropriate UI feedback"
+    }
+  ],
+  "handwave_bans": [
+    "Agents must not create a widget that does not wire to a real llama.cpp flag — every dropdown, slider, and input must map to an actual command-line argument passed to the binary",
+    "Agents must not stub the fine-tuning workflow — it must launch the real finetune binary and produce a real output model file",
+    "Agents must not use a legacy or default-looking widget toolkit — the UI must use modern React/Tailwind components with professional styling",
+    "Agents must not silently swallow errors — every process failure, missing file, or invalid configuration must surface as a visible in-app message"
+  ],
+  "acceptance_laws": [
+    "Every visible control must be wired to real behavior — clicking it must change a llama.cpp argument, launch a process, or update persisted settings",
+    "Fine-tuning is only accepted as done when a trained model file exists at the specified output path after the process completes",
+    "The app is only accepted as installable when it can be packaged as a .deb or AppImage and launched from the Linux app menu",
+    "Settings are only accepted as persistent when closing and reopening the app restores all previously saved configuration values"
+  ],
+  "evidence_laws": [
+    "Every feature must be proven by a scenario test with pass/fail evidence — no feature is done based on visual inspection alone",
+    "Server launch must be proven by asserting the child process is running and the configured port responds",
+    "Fine-tuning must be proven by asserting the output model file exists after training completes",
+    "Error handling must be proven by triggering a known failure condition and asserting a visible error message appears in the UI"
+  ],
+  "intent_ledger": [
+    {
+      "source": "I want a really nice GUI for using llama.cpp so I dont have to memorize any commands or flags",
+      "promise": "Every llama.cpp flag is exposed as a widget — zero command-line memorization required",
+      "feature_id": "settings-flags",
+      "acceptance": "Every llama.cpp server flag has a corresponding widget in the Settings tab, and changing a widget changes the flag passed to the binary"
+    },
+    {
+      "source": "I want it to have a very modern look and feel. Not some sort of dated windows XP sort of look. Professional and modern is what I want.",
+      "promise": "The UI must look professional and modern, using React/Tailwind components — no legacy widget aesthetics",
+      "feature_id": "settings-flags",
+      "acceptance": "The app uses modern React components with Tailwind CSS styling; visual review confirms no dated or legacy widget appearance"
+    },
+    {
+      "source": "Nice looking widgets and dropdown menus. Nice and organized tab layout",
+      "promise": "The app has an organized tab layout with nice-looking widgets and dropdown menus",
+      "feature_id": "settings-flags",
+      "acceptance": "The main interface has clearly organized tabs (Server, Models, Settings, Fine-tuning, System Monitor) with modern widgets in each"
+    },
+    {
+      "source": "Its for running and monitoring my local llm server. I want to easily load/unload models, fine tune, tweak settings, maximize performance of my hardware",
+      "promise": "Full control panel: server start/stop, model load/unload, settings tweak, fine-tuning, and hardware performance monitoring",
+      "feature_id": "server-control",
+      "acceptance": "All five tabs are functional and each maps to real llama.cpp functionality"
+    },
+    {
+      "source": "including a tab to monitor system resources so you know exactly whats going on with your system",
+      "promise": "A System Monitor tab showing real-time CPU, RAM, and GPU metrics",
+      "feature_id": "system-monitor",
+      "acceptance": "System Monitor tab displays real-time CPU, RAM, and GPU metrics updating at least once per second"
+    },
+    {
+      "source": "Already built — I have llama.cpp ready — Keeps the first version focused on the GUI; the app just points to your existing binary.",
+      "promise": "The app points to the user's existing llama.cpp binary — it does not download or build it",
+      "feature_id": "binary-config",
+      "acceptance": "First launch prompts for the binary path; the app never downloads or builds llama.cpp"
+    },
+    {
+      "source": "Everything including fine-tuning — More ambitious first build; fine-tuning adds significant complexity but you get the full vision at once.",
+      "promise": "Fine-tuning is included in the first version and must work end-to-end",
+      "feature_id": "fine-tuning",
+      "acceptance": "Fine-tuning tab launches the finetune binary, training completes, and the output model file exists at the specified path"
+    },
+    {
+      "source": "A downloadable package like a .deb or AppImage — Easy to install with a single file, shows up in your app menu like any normal application.",
+      "promise": "The app is distributed as a .deb or AppImage and appears in the Linux app menu",
+      "feature_id": "server-control",
+      "acceptance": "The app can be packaged as a .deb or AppImage and launched from the Linux application menu"
+    },
+    {
+      "source": "I can do all the above AND fine-tune a model successfully — Requires the full pipeline including training to work, which is a higher bar.",
+      "promise": "The full pipeline including fine-tuning must actually work — not just look like it works",
+      "feature_id": "fine-tuning",
+      "acceptance": "Scenario test proves fine-tuning produces a real output model file"
+    },
+    {
+      "source": "Show a clear error message and let you fix it and try again — Keeps you in control; the app explains what went wrong in plain language so you can adjust and retry.",
+      "promise": "Errors are shown as clear in-app messages in plain language, and the user can fix and retry",
+      "feature_id": "error-handling",
+      "acceptance": "Every failure condition produces a visible in-app error message with a plain-language explanation and a retry option"
+    },
+    {
+      "source": "Scenario tests for the critical workflows - prove the most important user paths with pass/fail evidence.",
+      "promise": "Critical workflows are proven by scenario tests with pass/fail evidence",
+      "feature_id": "server-control",
+      "acceptance": "Each feature has scenario tests defined and passing that prove the critical user paths"
+    },
+    {
+      "source": "Preserve current user workflows and data - new work should not break existing launch, save, or run paths.",
+      "promise": "Existing user workflows and data must not be broken by new work",
+      "feature_id": "binary-config",
+      "acceptance": "Config file format changes are backward-compatible; existing settings are preserved across updates"
+    },
+    {
+      "source": "Finish missing real behavior - replace placeholders and incomplete flows with working code.",
+      "promise": "No placeholder buttons or incomplete flows — every control maps to real behavior",
+      "feature_id": "settings-flags",
+      "acceptance": "Every visible control is wired to real llama.cpp functionality — no stubs or placeholders"
+    },
+    {
+      "source": "Tool permissions, memory, and confirmation rules - keeps autonomous behavior predictable and safe.",
+      "promise": "Agent operates with locked tool permissions, memory rules, and confirmation rules",
+      "feature_id": "binary-config",
+      "acceptance": "Agent rules are defined in conventions: no direct file system access from frontend, no modifying llama.cpp binary, confirm before changing config format"
+    }
+  ]
+}

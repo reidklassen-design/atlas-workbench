@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Atlas Workbench
+Comment=Modern llama.cpp desktop control panel
+Exec=/opt/atlas-workbench/bin/atlas-workbench
+Icon=atlas-workbench
+Terminal=false
+Categories=Development;Utility;Science;
+StartupNotify=true

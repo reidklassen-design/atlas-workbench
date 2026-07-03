@@ -1,0 +1,68 @@
+{
+  "layers": {
+    "ui": {
+      "may_depend_on": [
+        "state"
+      ],
+      "must_not_depend_on": [
+        "process",
+        "config"
+      ],
+      "description": "React/TypeScript frontend with Tailwind CSS — renders tabs, widgets, log panels, error messages, and system monitor displays"
+    },
+    "state": {
+      "may_depend_on": [
+        "ipc"
+      ],
+      "must_not_depend_on": [
+        "process"
+      ],
+      "description": "Frontend state management — holds current settings, server status, model selection, training status, and error state; communicates with backend via Tauri IPC"
+    },
+    "ipc": {
+      "may_depend_on": [
+        "process",
+        "config",
+        "monitor"
+      ],
+      "must_not_depend_on": [
+        "ui",
+        "state"
+      ],
+      "description": "Tauri command layer — Rust functions exposed to the frontend for launching/stopping processes, reading config, and fetching system metrics"
+    },
+    "process": {
+      "may_depend_on": [
+        "config"
+      ],
+      "must_not_depend_on": [
+        "ui",
+        "state",
+        "ipc"
+      ],
+      "description": "Rust process management — spawns llama.cpp server and finetune binaries as child processes, captures stdout/stderr, monitors exit codes, and reports status"
+    },
+    "config": {
+      "may_depend_on": [],
+      "must_not_depend_on": [
+        "ui",
+        "state",
+        "ipc",
+        "process",
+        "monitor"
+      ],
+      "description": "Rust config persistence — reads and writes binary paths, model directory, all flag values, and fine-tuning settings to a config file in ~/.config/atlas-workbench"
+    },
+    "monitor": {
+      "may_depend_on": [],
+      "must_not_depend_on": [
+        "ui",
+        "state",
+        "ipc",
+        "process",
+        "config"
+      ],
+      "description": "Rust system monitoring — uses sysinfo crate to collect CPU, RAM, GPU, and process metrics; polled by the IPC layer"
+    }
+  }
+}

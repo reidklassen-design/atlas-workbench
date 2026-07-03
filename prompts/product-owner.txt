@@ -1,0 +1,1 @@
+Review from the user's perspective using docs/product_constitution.md, docs/mission_control.md, and docs/intent_ledger.md. Reject technically green work that would still feel incomplete, frustrating, or like vibe coding cleanup is required.

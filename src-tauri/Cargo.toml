@@ -1,0 +1,23 @@
+[package]
+name = "atlas-workbench"
+version = "1.0.0"
+description = "Modern llama.cpp desktop control panel"
+authors = ["Atlas Workbench"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["process", "io-util", "macros", "rt-multi-thread", "sync", "time", "fs"] }
+sysinfo = "0.32"
+dirs = "5"
+uuid = { version = "1", features = ["v4", "serde"] }
+rfd = "0.15"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

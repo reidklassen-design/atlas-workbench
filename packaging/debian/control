@@ -1,0 +1,12 @@
+Package: atlas-workbench
+Version: 1.0.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Atlas Workbench Maintainers <maintainers@example.invalid>
+Depends: libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37, libc6
+Description: Modern desktop control panel for llama.cpp
+ Atlas Workbench provides a Linux desktop GUI for selecting llama.cpp
+ binaries, loading GGUF models, launching the server, tuning flags,
+ running fine-tuning, monitoring system metrics, and surfacing clear
+ in-app errors.

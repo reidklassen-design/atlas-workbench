@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Atlas Workbench",
+  "version": "1.0.0",
+  "identifier": "com.darkfactory.atlasworkbench",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Atlas Workbench",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 680
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb"],
+    "category": "DeveloperTool",
+    "shortDescription": "Modern llama.cpp desktop control panel",
+    "longDescription": "Atlas Workbench wraps the user's existing llama.cpp binaries with a modern desktop GUI for server control, model management, flags, fine-tuning, monitoring, and clear error recovery.",
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  }
+}

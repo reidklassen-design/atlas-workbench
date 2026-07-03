@@ -1,0 +1,305 @@
+{
+  "project": {
+    "slug": "atlas-workbench",
+    "name": "Atlas Workbench",
+    "purpose": "A modern Linux desktop control panel that wraps the user's existing llama.cpp binary, exposing every server flag, model operation, and fine-tuning parameter through clean widgets instead of command-line memorization.",
+    "where_it_runs": "Linux desktop, installed via .deb or AppImage, launches as a native window wrapping the user's existing llama.cpp server and finetune binaries as child processes",
+    "stack": [
+      "Tauri",
+      "Rust",
+      "React",
+      "TypeScript",
+      "Tailwind CSS",
+      "sysinfo (Rust crate)",
+      "serde",
+      "tauri-plugin-store",
+      "vitest",
+      "cargo"
+    ]
+  },
+  "features": [
+    {
+      "id": "server-control",
+      "name": "Server Control Tab",
+      "description": "A tab where the user starts and stops the llama.cpp server, configures host and port, and sees real-time server stdout/stderr in a log panel.",
+      "entry_points": [
+        "Server tab in the main tab layout",
+        "Start Server button",
+        "Stop Server button",
+        "Host input field",
+        "Port input field",
+        "Log panel"
+      ],
+      "requirements": [
+        "MUST provide a Start button that launches the llama.cpp server binary as a child process with the currently configured flags",
+        "MUST provide a Stop button that gracefully terminates the server child process",
+        "MUST provide host and port input fields that map to the --host and --port flags",
+        "MUST display server stdout and stderr in a scrollable log panel in real time",
+        "MUST show server status (running/stopped) as a visible indicator",
+        "MUST disable the Start button when the server is already running and disable Stop when it is not"
+      ],
+      "acceptance_criteria": [
+        "Clicking Start launches the server process and the log panel shows startup output",
+        "Clicking Stop terminates the server process and the status indicator changes to stopped",
+        "Changing host and port values changes the flags passed to the server binary on next launch",
+        "The log panel updates in real time as the server writes to stdout/stderr"
+      ],
+      "verification": [
+        "Scenario test: configure host=127.0.0.1 port=8080, click Start, assert process is running, assert HTTP response on port 8080, click Stop, assert process is terminated",
+        "Scenario test: start server, verify log panel contains expected server startup text within 5 seconds"
+      ],
+      "done_requires": [
+        "feature_list.json status is done",
+        "verification/evidence/server-control.md exists",
+        "evidence lists verification commands that were actually run",
+        "evidence lists wiring audit from entry point to implementation",
+        "evidence lists tests or scenarios proving every acceptance criterion",
+        "evidence lists no known gaps"
+      ]
+    },
+    {
+      "id": "model-management",
+      "name": "Model Management Tab",
+      "description": "A tab where the user browses for GGUF model files, loads a model into the server, and unloads it.",
+      "entry_points": [
+        "Models tab in the main tab layout",
+        "Browse directory button",
+        "Model file list",
+        "Load Model button",
+        "Unload Model button",
+        "Currently loaded model indicator"
+      ],
+      "requirements": [
+        "MUST provide a file browser or directory picker to select a folder containing GGUF model files",
+        "MUST list all .gguf files found in the selected directory",
+        "MUST allow the user to select a model file to load",
+        "MUST pass the selected model path to the server as the --model flag",
+        "MUST show which model is currently loaded",
+        "MUST provide an Unload button that clears the current model selection",
+        "MUST persist the last-used model directory and selected model between sessions"
+      ],
+      "acceptance_criteria": [
+        "Browsing to a directory lists all .gguf files in that directory",
+        "Selecting a model and clicking Load sets it as the active model for the server",
+        "The loaded model name is visible in the UI",
+        "Clicking Unload clears the model selection",
+        "Closing and reopening the app restores the last model directory and selection"
+      ],
+      "verification": [
+        "Scenario test: browse to a directory with GGUF files, assert files are listed, select one, click Load, start server, assert server log shows the correct model path",
+        "Scenario test: point to a nonexistent directory, assert a clear error message appears"
+      ],
+      "done_requires": [
+        "feature_list.json status is done",
+        "verification/evidence/model-management.md exists",
+        "evidence lists verification commands that were actually run",
+        "evidence lists wiring audit from entry point to implementation",
+        "evidence lists tests or scenarios proving every acceptance criterion",
+        "evidence lists no known gaps"
+      ]
+    },
+    {
+      "id": "settings-flags",
+      "name": "Settings & Flags Tab",
+      "description": "A tab exposing every llama.cpp server flag as a modern widget — dropdowns, sliders, toggles, and text inputs — organized in a clean layout.",
+      "entry_points": [
+        "Settings tab in the main tab layout",
+        "Flag widgets (dropdowns, sliders, toggles, text inputs)",
+        "Reset to Defaults button",
+        "Flag section headers"
+      ],
+      "requirements": [
+        "MUST expose every llama.cpp server flag as an appropriate widget (dropdown for enum-like flags, slider for numeric ranges, toggle for booleans, text input for strings)",
+        "MUST group flags into logical sections (e.g., Performance, Context, Sampling, GPU/Acceleration)",
+        "MUST show the current value of each flag in its widget",
+        "MUST pass all configured flag values to the server binary on launch",
+        "MUST persist all flag values between sessions",
+        "MUST provide a Reset to Defaults button for each section or globally",
+        "MUST show a tooltip or help text for each flag explaining what it does in plain language"
+      ],
+      "acceptance_criteria": [
+        "Every llama.cpp server flag has a corresponding widget",
+        "Changing a widget value updates the flag passed to the server on next launch",
+        "Flag values persist after closing and reopening the app",
+        "Reset to Defaults restores all flags to their default values",
+        "Each flag has a tooltip with a plain-language description"
+      ],
+      "verification": [
+        "Scenario test: change context size to 4096, start server, assert server log shows --ctx-size 4096",
+        "Scenario test: enable GPU offload with a slider value of 20, start server, assert server log shows --n-gpu-layers 20",
+        "Scenario test: change settings, close app, reopen app, assert all previously set values are restored"
+      ],
+      "done_requires": [
+        "feature_list.json status is done",
+        "verification/evidence/settings-flags.md exists",
+        "evidence lists verification commands that were actually run",
+        "evidence lists wiring audit from entry point to implementation",
+        "evidence lists tests or scenarios proving every acceptance criterion",
+        "evidence lists no known gaps"
+      ]
+    },
+    {
+      "id": "fine-tuning",
+      "name": "Fine-Tuning Tab",
+      "description": "A tab where the user configures and runs llama.cpp fine-tuning with form controls for dataset path, learning rate, epochs, output path, and other training parameters.",
+      "entry_points": [
+        "Fine-tuning tab in the main tab layout",
+        "Dataset path file picker",
+        "Output path file picker",
+        "Learning rate input",
+        "Epochs input",
+        "Batch size input",
+        "Start Training button",
+        "Stop Training button",
+        "Training log panel"
+      ],
+      "requirements": [
+        "MUST provide a file picker for the training dataset path",
+        "MUST provide a file picker or text input for the output model path",
+        "MUST provide form controls for learning rate, epochs, batch size, and other finetune binary parameters",
+        "MUST launch the llama.cpp finetune binary as a child process with all configured parameters",
+        "MUST display training progress and logs in a real-time log panel",
+        "MUST show a clear success message when training completes and the output model file exists",
+        "MUST show a clear error message if training fails, with plain-language explanation",
+        "MUST provide a Stop Training button to terminate the finetune process",
+        "MUST persist fine-tuning configuration between sessions"
+      ],
+      "acceptance_criteria": [
+        "Configuring all parameters and clicking Start Training launches the finetune binary",
+        "Training logs appear in real time in the log panel",
+        "When training completes, the output model file exists at the specified path",
+        "If training fails, a clear error message appears in the UI",
+        "Clicking Stop Training terminates the finetune process",
+        "Fine-tuning settings persist after closing and reopening the app"
+      ],
+      "verification": [
+        "Scenario test: configure a small dataset, set 1 epoch, set output path, click Start Training, wait for completion, assert output model file exists at the specified path",
+        "Scenario test: point to a nonexistent dataset, click Start Training, assert a clear error message appears",
+        "Scenario test: start training, click Stop Training, assert the finetune process is terminated"
+      ],
+      "done_requires": [
+        "feature_list.json status is done",
+        "verification/evidence/fine-tuning.md exists",
+        "evidence lists verification commands that were actually run",
+        "evidence lists wiring audit from entry point to implementation",
+        "evidence lists tests or scenarios proving every acceptance criterion",
+        "evidence lists no known gaps"
+      ]
+    },
+    {
+      "id": "system-monitor",
+      "name": "System Monitor Tab",
+      "description": "A tab showing real-time CPU, RAM, and GPU usage metrics so the user can see exactly what is happening with their system while the server or training runs.",
+      "entry_points": [
+        "System Monitor tab in the main tab layout",
+        "CPU usage display",
+        "RAM usage display",
+        "GPU usage display",
+        "Process resource usage display"
+      ],
+      "requirements": [
+        "MUST display real-time CPU usage (overall percentage and per-core if available)",
+        "MUST display real-time RAM usage (used/total)",
+        "MUST display real-time GPU usage if a GPU is detected",
+        "MUST update metrics at least once per second without freezing the UI",
+        "MUST show a clear 'GPU not detected' message if no GPU is available",
+        "MUST show the llama.cpp child process resource usage separately if the server or training is running"
+      ],
+      "acceptance_criteria": [
+        "CPU and RAM metrics update at least once per second",
+        "GPU metrics display when a GPU is present, or a 'GPU not detected' message when not",
+        "When the server is running, the llama.cpp process resource usage is visible",
+        "The UI does not freeze or stutter while metrics update"
+      ],
+      "verification": [
+        "Scenario test: open System Monitor tab, assert CPU and RAM values update within 2 seconds, assert no UI freeze",
+        "Scenario test: start server, open System Monitor, assert llama.cpp process appears in the process resource display",
+        "Scenario test: run on a machine without a GPU, assert 'GPU not detected' message is shown"
+      ],
+      "done_requires": [
+        "feature_list.json status is done",
+        "verification/evidence/system-monitor.md exists",
+        "evidence lists verification commands that were actually run",
+        "evidence lists wiring audit from entry point to implementation",
+        "evidence lists tests or scenarios proving every acceptance criterion",
+        "evidence lists no known gaps"
+      ]
+    },
+    {
+      "id": "binary-config",
+      "name": "Binary Configuration & First Launch",
+      "description": "On first launch, the app detects whether the llama.cpp binary path is configured. If not, it prompts the user to locate the server and finetune binaries, validates they are executable, and persists the paths.",
+      "entry_points": [
+        "First-launch binary path prompt dialog",
+        "Binary path settings section (accessible from Settings tab or a menu)"
+      ],
+      "requirements": [
+        "MUST check on launch whether the llama.cpp server binary path is configured and exists",
+        "MUST prompt the user with a file picker to locate the server binary if it is not configured",
+        "MUST also prompt for the finetune binary path (may be the same binary or a separate one)",
+        "MUST validate that the selected files exist and are executable before accepting them",
+        "MUST persist the binary paths in a config file between sessions",
+        "MUST show a clear error message if the binary is not executable or does not exist",
+        "MUST allow the user to change the binary path later from a Settings section"
+      ],
+      "acceptance_criteria": [
+        "On first launch with no config, the app prompts for the server binary path",
+        "Selecting a valid executable path is accepted and persisted",
+        "Selecting a nonexistent or non-executable file shows a clear error and re-prompts",
+        "Closing and reopening the app does not re-prompt if valid paths were previously saved",
+        "The user can change the binary path from the settings section at any time"
+      ],
+      "verification": [
+        "Scenario test: delete config file, launch app, assert binary path prompt appears, provide valid path, assert prompt does not reappear on next launch",
+        "Scenario test: provide a nonexistent file path, assert error message appears and prompt re-shows",
+        "Scenario test: provide a non-executable file, assert error message appears"
+      ],
+      "done_requires": [
+        "feature_list.json status is done",
+        "verification/evidence/binary-config.md exists",
+        "evidence lists verification commands that were actually run",
+        "evidence lists wiring audit from entry point to implementation",
+        "evidence lists tests or scenarios proving every acceptance criterion",
+        "evidence lists no known gaps"
+      ]
+    },
+    {
+      "id": "error-handling",
+      "name": "Error Handling & Recovery",
+      "description": "A cross-cutting feature ensuring that every process failure, missing file, invalid configuration, or crash surfaces as a clear in-app error message in plain language, allowing the user to fix the issue and retry.",
+      "entry_points": [
+        "Error message dialog or banner (appears in any tab when an error occurs)",
+        "Retry button in the error message",
+        "Dismiss button in the error message"
+      ],
+      "requirements": [
+        "MUST show a visible in-app error message (not a terminal or console log) for every failure condition",
+        "MUST write error messages in plain language that explains what went wrong and suggests a fix",
+        "MUST not silently swallow errors or hide them in logs only",
+        "MUST allow the user to dismiss the error and retry the operation",
+        "MUST log errors to an internal log file for diagnostics in addition to showing them in the UI",
+        "MUST handle child process crashes by showing an error message with the process exit code and last stderr output"
+      ],
+      "acceptance_criteria": [
+        "When the server binary crashes, an error message appears with the exit code and relevant stderr output",
+        "When a model file does not exist, an error message appears explaining the file was not found",
+        "When fine-tuning fails, an error message appears explaining the failure reason",
+        "Every error message includes a plain-language explanation and a suggested fix",
+        "The user can dismiss the error and retry the operation"
+      ],
+      "verification": [
+        "Scenario test: point to a nonexistent model file, click Start, assert error message appears with 'file not found' explanation",
+        "Scenario test: kill the server process externally, assert the app shows an error message with the exit code",
+        "Scenario test: start fine-tuning with an invalid dataset, assert error message appears with explanation"
+      ],
+      "done_requires": [
+        "feature_list.json status is done",
+        "verification/evidence/error-handling.md exists",
+        "evidence lists verification commands that were actually run",
+        "evidence lists wiring audit from entry point to implementation",
+        "evidence lists tests or scenarios proving every acceptance criterion",
+        "evidence lists no known gaps"
+      ]
+    }
+  ]
+}
