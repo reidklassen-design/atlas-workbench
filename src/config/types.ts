@@ -84,6 +84,7 @@ export interface ProcessLogLine {
   stream: "stdout" | "stderr";
   text: string;
   ts: number;
+  replaceKey?: string;
 }
 
 export interface ProcessStatus {

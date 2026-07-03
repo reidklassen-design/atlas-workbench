@@ -92,6 +92,16 @@ describe("ServerTab", () => {
     controller.dispose();
   });
 
+  it("replaces live model loading progress instead of stacking stale percentages", async () => {
+    const { controller, emit } = await renderApp(<ServerTab />);
+    emit("log", { kind: "server", stream: "stdout", text: "Model loading: 10%...", replaceKey: "server:model-loading", ts: Date.now() });
+    emit("log", { kind: "server", stream: "stdout", text: "Model loading: 42%...", replaceKey: "server:model-loading", ts: Date.now() });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(screen.queryByText("Model loading: 10%...")).toBeNull();
+    expect(screen.getByText("Model loading: 42%...")).toBeDefined();
+    controller.dispose();
+  });
+
   it("shows the exact generated launch command with changed context length", async () => {
     const handlers = baselineHandlers({
       "config.load": () => baselineConfig({ serverFlags: { ...defaultServerFlags(), "ctx-size": 4096 } }),

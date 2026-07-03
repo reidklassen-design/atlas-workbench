@@ -51,8 +51,8 @@ export class ProcessManager extends EventEmitter {
     this.env = opts.env;
   }
 
-  private emitLog(kind: ProcessKind, stream: "stdout" | "stderr", text: string): void {
-    const line: ProcessLogLine & { kind: ProcessKind } = { kind, stream, text, ts: Date.now() };
+  private emitLog(kind: ProcessKind, stream: "stdout" | "stderr", text: string, replaceKey?: string): void {
+    const line: ProcessLogLine & { kind: ProcessKind } = { kind, stream, text, ts: Date.now(), replaceKey };
     this.emit("log", line);
   }
 
@@ -63,6 +63,50 @@ export class ProcessManager extends EventEmitter {
   private pushTail(arr: string[], text: string): void {
     arr.push(text);
     if (arr.length > TAIL_LINES) arr.shift();
+  }
+
+  private modelLoadingProgressText(text: string): string | null {
+    const trimmed = text.trim();
+    if (!trimmed.includes("%")) return null;
+    const lower = trimmed.toLowerCase();
+    if (!/(load|tensor|model|gguf|llama_model)/.test(lower)) return null;
+    const match = trimmed.match(/([0-9]+(?:\.[0-9]+)?)\s*%/);
+    if (!match) return null;
+    const value = Number(match[1]);
+    if (!Number.isFinite(value) || value < 0 || value > 100) return null;
+    return `Model loading: ${match[1]}%...`;
+  }
+
+  private modelLoadingStageText(text: string): string | null {
+    const lower = text.toLowerCase();
+    if (lower.includes("load_model: loading model") || lower.includes("loading model '")) return "Model loading: opening model file...";
+    if (lower.includes("loaded meta data") || (lower.includes("llama_model_loader") && lower.includes("metadata"))) return "Model loading: reading GGUF metadata...";
+    if (lower.includes("loading model tensors") || lower.includes("load_tensors")) return "Model loading: loading tensors...";
+    if (lower.includes("offloading") || lower.includes("assigned to device")) return "Model loading: assigning layers to GPU...";
+    if (lower.includes("initializing, n_slots") || lower.includes("llama_context")) return "Model loading: initializing context...";
+    if (lower.includes("model loaded")) return "Model loading: ready.";
+    return null;
+  }
+
+  private emitProcessFragment(managed: ManagedProcess, stream: "stdout" | "stderr", text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const tail = stream === "stderr" ? managed.stderrTail : managed.stdoutTail;
+    this.pushTail(tail, trimmed);
+    if (managed.kind === "server") {
+      const progress = this.modelLoadingProgressText(trimmed);
+      if (progress) {
+        this.emitLog(managed.kind, stream, progress, "server:model-loading");
+        return;
+      }
+      const stage = this.modelLoadingStageText(trimmed);
+      if (stage) {
+        this.emitLog(managed.kind, stream, trimmed);
+        this.emitLog(managed.kind, "stdout", stage, "server:model-loading");
+        return;
+      }
+    }
+    this.emitLog(managed.kind, stream, trimmed);
   }
 
   startServer(config: AppConfig): Promise<ProcessStatus> {
@@ -124,28 +168,28 @@ export class ProcessManager extends EventEmitter {
       this.emitStatus(kind, startingStatus);
 
       const lineBuffers = { out: "", err: "" };
-      const splitLines = (buf: string, chunk: string): { lines: string[]; rest: string } => {
+      const splitFragments = (buf: string, chunk: string): { fragments: string[]; rest: string } => {
         const data = buf + chunk;
-        const parts = data.split(/\r?\n/);
-        const rest = parts.pop() ?? "";
-        return { lines: parts, rest };
+        const fragments: string[] = [];
+        let start = 0;
+        for (let i = 0; i < data.length; i += 1) {
+          if (data[i] === "\n" || data[i] === "\r") {
+            if (i > start) fragments.push(data.slice(start, i));
+            start = i + 1;
+          }
+        }
+        return { fragments, rest: data.slice(start) };
       };
 
       proc.stdout?.on("data", (chunk: Buffer) => {
-        const { lines, rest } = splitLines(lineBuffers.out, chunk.toString("utf8"));
+        const { fragments, rest } = splitFragments(lineBuffers.out, chunk.toString("utf8"));
         lineBuffers.out = rest;
-        for (const line of lines) {
-          this.pushTail(managed.stdoutTail, line);
-          this.emitLog(kind, "stdout", line);
-        }
+        for (const fragment of fragments) this.emitProcessFragment(managed, "stdout", fragment);
       });
       proc.stderr?.on("data", (chunk: Buffer) => {
-        const { lines, rest } = splitLines(lineBuffers.err, chunk.toString("utf8"));
+        const { fragments, rest } = splitFragments(lineBuffers.err, chunk.toString("utf8"));
         lineBuffers.err = rest;
-        for (const line of lines) {
-          this.pushTail(managed.stderrTail, line);
-          this.emitLog(kind, "stderr", line);
-        }
+        for (const fragment of fragments) this.emitProcessFragment(managed, "stderr", fragment);
       });
 
       proc.once("error", (err: NodeJS.ErrnoException) => {
@@ -177,6 +221,10 @@ export class ProcessManager extends EventEmitter {
       });
 
       proc.once("close", (code, signal) => {
+        if (lineBuffers.out) this.emitProcessFragment(managed, "stdout", lineBuffers.out);
+        if (lineBuffers.err) this.emitProcessFragment(managed, "stderr", lineBuffers.err);
+        lineBuffers.out = "";
+        lineBuffers.err = "";
         const wasRunning = !managed.dead && managed.exitCode === null;
         managed.exitCode = code;
         managed.signal = signal as NodeJS.Signals | null;

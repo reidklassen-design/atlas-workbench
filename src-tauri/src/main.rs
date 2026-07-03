@@ -4,7 +4,6 @@ use std::{
     backtrace::Backtrace,
     collections::{HashMap, HashSet},
     fs,
-    io::{BufRead, BufReader},
     io::{Read, Write},
     net::{TcpListener, TcpStream, ToSocketAddrs},
     os::unix::fs::PermissionsExt,
@@ -642,9 +641,17 @@ fn append_process_log(ts: u128, kind: &str, stream: &str, text: &str) {
 }
 
 fn emit_log(app: &AppHandle, kind: &str, stream: &str, text: String) {
+    emit_log_with_replace_key(app, kind, stream, text, None);
+}
+
+fn emit_log_with_replace_key(app: &AppHandle, kind: &str, stream: &str, text: String, replace_key: Option<&str>) {
     let ts = now();
     append_process_log(ts, kind, stream, &text);
-    let _ = app.emit("log", json!({ "kind": kind, "stream": stream, "text": text, "ts": ts }));
+    let mut payload = json!({ "kind": kind, "stream": stream, "text": text, "ts": ts });
+    if let Some(key) = replace_key {
+        payload["replaceKey"] = json!(key);
+    }
+    let _ = app.emit("log", payload);
 }
 
 fn remember_tail(tails: &Arc<Mutex<HashMap<String, Vec<String>>>>, kind: &str, text: String) {
@@ -713,15 +720,117 @@ fn child_registered(children: &Arc<Mutex<HashMap<String, Child>>>, kind: &str) -
     children.lock().map(|map| map.contains_key(kind)).unwrap_or(false)
 }
 
-fn spawn_reader(app: AppHandle, tails: Arc<Mutex<HashMap<String, Vec<String>>>>, kind: &'static str, stream: &'static str, reader: impl std::io::Read + Send + 'static) {
+fn percent_fragment(text: &str) -> Option<String> {
+    let percent_idx = text.find('%')?;
+    let prefix = &text[..percent_idx];
+    let start = prefix
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !ch.is_ascii_digit() && *ch != '.')
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .unwrap_or(0);
+    let value = prefix[start..].trim();
+    if value.is_empty() {
+        return None;
+    }
+    let parsed = value.parse::<f64>().ok()?;
+    if !(0.0..=100.0).contains(&parsed) {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn model_loading_progress_text(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || !trimmed.contains('%') {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let loading_related = lower.contains("load")
+        || lower.contains("tensor")
+        || lower.contains("model")
+        || lower.contains("gguf")
+        || lower.contains("llama_model");
+    if !loading_related {
+        return None;
+    }
+    percent_fragment(trimmed).map(|percent| format!("Model loading: {}%...", percent))
+}
+
+fn model_loading_stage_text(text: &str) -> Option<&'static str> {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("load_model: loading model") || lower.contains("loading model '") {
+        return Some("Model loading: opening model file...");
+    }
+    if lower.contains("loaded meta data") || (lower.contains("llama_model_loader") && lower.contains("metadata")) {
+        return Some("Model loading: reading GGUF metadata...");
+    }
+    if lower.contains("loading model tensors") || lower.contains("load_tensors") {
+        return Some("Model loading: loading tensors...");
+    }
+    if lower.contains("offloading") || lower.contains("assigned to device") {
+        return Some("Model loading: assigning layers to GPU...");
+    }
+    if lower.contains("initializing, n_slots") || lower.contains("llama_context") {
+        return Some("Model loading: initializing context...");
+    }
+    if lower.contains("model loaded") {
+        return Some("Model loading: ready.");
+    }
+    None
+}
+
+fn emit_process_fragment(app: &AppHandle, tails: &Arc<Mutex<HashMap<String, Vec<String>>>>, kind: &'static str, stream: &'static str, text: String) {
+    let trimmed = text.trim_matches(['\r', '\n']).trim().to_string();
+    if trimmed.is_empty() {
+        return;
+    }
+    if stream == "stderr" {
+        remember_tail(tails, kind, trimmed.clone());
+    }
+    if kind == "server" {
+        if let Some(progress) = model_loading_progress_text(&trimmed) {
+            emit_log_with_replace_key(app, kind, stream, progress, Some("server:model-loading"));
+            return;
+        }
+        if let Some(stage) = model_loading_stage_text(&trimmed) {
+            emit_log(app, kind, stream, trimmed);
+            emit_log_with_replace_key(app, kind, "stdout", stage.to_string(), Some("server:model-loading"));
+            return;
+        }
+    }
+    emit_log(app, kind, stream, trimmed);
+}
+
+fn spawn_reader(app: AppHandle, tails: Arc<Mutex<HashMap<String, Vec<String>>>>, kind: &'static str, stream: &'static str, mut reader: impl std::io::Read + Send + 'static) {
     std::thread::spawn(move || {
-        for line in BufReader::new(reader).lines() {
-            if let Ok(text) = line {
-                if stream == "stderr" {
-                    remember_tail(&tails, kind, text.clone());
+        let mut read_buf = [0_u8; 4096];
+        let mut pending: Vec<u8> = Vec::new();
+        loop {
+            match reader.read(&mut read_buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    for byte in &read_buf[..n] {
+                        if *byte == b'\n' || *byte == b'\r' {
+                            if !pending.is_empty() {
+                                let text = String::from_utf8_lossy(&pending).to_string();
+                                emit_process_fragment(&app, &tails, kind, stream, text);
+                                pending.clear();
+                            }
+                        } else {
+                            pending.push(*byte);
+                        }
+                    }
                 }
-                emit_log(&app, kind, stream, text);
+                Err(err) => {
+                    emit_log(&app, kind, "stderr", format!("Could not read {} stream: {}", stream, err));
+                    break;
+                }
             }
+        }
+        if !pending.is_empty() {
+            let text = String::from_utf8_lossy(&pending).to_string();
+            emit_process_fragment(&app, &tails, kind, stream, text);
         }
     });
 }
@@ -841,7 +950,7 @@ fn wait_for_server_ready(
     let mut last_progress = Instant::now();
     let mut attempts = 0_u64;
     let mut last_detail = "health probe has not connected yet".to_string();
-    emit_log(
+    emit_log_with_replace_key(
         app,
         "server",
         "stdout",
@@ -851,6 +960,7 @@ fn wait_for_server_ready(
             host,
             timeout.as_secs()
         ),
+        Some("server:health-wait"),
     );
 
     while Instant::now() < deadline {
@@ -896,7 +1006,7 @@ fn wait_for_server_ready(
         }
 
         if last_progress.elapsed() >= Duration::from_secs(HEALTH_PROGRESS_LOG_SECS) {
-            emit_log(
+            emit_log_with_replace_key(
                 app,
                 "server",
                 "stdout",
@@ -906,6 +1016,7 @@ fn wait_for_server_ready(
                     attempts,
                     last_detail
                 ),
+                Some("server:health-wait"),
             );
             last_progress = Instant::now();
         }

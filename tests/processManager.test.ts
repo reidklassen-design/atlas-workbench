@@ -150,6 +150,25 @@ describe("ProcessManager server lifecycle", () => {
     await waitFor(() => !pm.isRunning("server"), (v) => v, 3000);
   });
 
+  it("parses real carriage-return model loading percentages as one replaceable progress row", async () => {
+    const { config } = cfg();
+    const pm = new ProcessManager({
+      spawnImpl: mockSpawn({
+        stdout: ["load_tensors: loading model tensors 10%\rload_tensors: loading model tensors 42%\nllama_server: model loaded\n"],
+      }),
+    });
+    const logs: ProcessLogLine[] = [];
+    pm.on("log", (line) => logs.push(line));
+
+    await pm.startServer(config);
+    await waitFor(() => logs.some((l) => l.text === "Model loading: 42%..."), (v) => v, 3000);
+
+    const progress = logs.filter((line) => line.replaceKey === "server:model-loading");
+    expect(progress.map((line) => line.text)).toContain("Model loading: 10%...");
+    expect(progress.map((line) => line.text)).toContain("Model loading: 42%...");
+    expect(logs.some((line) => line.text.includes("Health check") && line.text.includes("%"))).toBe(false);
+  });
+
   it("disables Start when running and Stop when not running via status", async () => {
     const { config } = cfg();
     const pm = new ProcessManager({ spawnImpl: mockSpawn({ stayRunning: true }) });

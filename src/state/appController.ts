@@ -60,6 +60,16 @@ export class AppController {
   }
 
   private pushLog(target: "serverLogs" | "trainingLogs", line: ProcessLogLine): void {
+    if (line.replaceKey) {
+      const existing = this[target].findIndex((l) => l.replaceKey === line.replaceKey);
+      if (existing >= 0) {
+        const arr = this[target].slice();
+        arr[existing] = line;
+        this[target] = arr;
+        this.notify();
+        return;
+      }
+    }
     const arr = this[target].concat(line);
     if (arr.length > MAX_LOG_LINES) arr.splice(0, arr.length - MAX_LOG_LINES);
     this[target] = arr;
@@ -124,8 +134,9 @@ export class AppController {
     this.unsubs.push(
       this.onEvent("log", (payload) => {
         const line = payload as ProcessLogLine & { kind: "server" | "finetune" };
-        if (line.kind === "server") this.pushLog("serverLogs", { stream: line.stream, text: line.text, ts: line.ts });
-        else this.pushLog("trainingLogs", { stream: line.stream, text: line.text, ts: line.ts });
+        const logLine = { stream: line.stream, text: line.text, ts: line.ts, replaceKey: line.replaceKey };
+        if (line.kind === "server") this.pushLog("serverLogs", logLine);
+        else this.pushLog("trainingLogs", logLine);
       }),
     );
     this.unsubs.push(
