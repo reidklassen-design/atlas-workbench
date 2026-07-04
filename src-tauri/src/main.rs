@@ -27,8 +27,10 @@ struct AppState {
     children: Arc<Mutex<HashMap<String, Child>>>,
     log_tails: Arc<Mutex<HashMap<String, Vec<String>>>>,
     proc_samples: Mutex<HashMap<usize, ProcSample>>,
+    cpu_sample: Mutex<Option<CpuTickSample>>,
     runtime_sample: Mutex<Option<RuntimeCounterSample>>,
     gateway: Arc<Mutex<Option<GatewayRuntime>>>,
+    gateway_stats: Arc<Mutex<GatewayStats>>,
 }
 
 struct GatewayRuntime {
@@ -38,10 +40,32 @@ struct GatewayRuntime {
     port: i64,
 }
 
+#[derive(Default, Clone)]
+struct GatewayStats {
+    request_count: i64,
+    rejected_count: i64,
+    compressed_count: i64,
+    compaction_active: bool,
+    last_error: Option<String>,
+    last_budget: Option<Value>,
+    last_compression: Option<Value>,
+}
+
 #[derive(Clone, Copy)]
 struct ProcSample {
     ticks: u64,
     ts: u128,
+}
+
+#[derive(Clone)]
+struct CpuTickSample {
+    per_core: Vec<CpuTicks>,
+}
+
+#[derive(Clone, Copy)]
+struct CpuTicks {
+    idle: u64,
+    total: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -1884,41 +1908,127 @@ fn proxy_http_request(config: &Value, method: &str, path: &str, body: &[u8], con
     Ok((status, response_content_type, response_body))
 }
 
-fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128) {
+fn requested_output_tokens(body: &Value) -> i64 {
+    body.get("max_tokens")
+        .or_else(|| body.get("max_completion_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+}
+
+fn gateway_budget_value(ok: bool, estimated_prompt_tokens: i64, requested_output_tokens: i64, usable_prompt_tokens: i64, action: &str, reasons: Vec<String>) -> Value {
+    json!({
+        "ok": ok,
+        "estimatedPromptTokens": estimated_prompt_tokens,
+        "requestedOutputTokens": requested_output_tokens,
+        "usablePromptTokens": usable_prompt_tokens,
+        "overflowTokens": (estimated_prompt_tokens - usable_prompt_tokens).max(0),
+        "action": action,
+        "reasons": reasons,
+    })
+}
+
+fn update_gateway_stats<F>(stats: &Arc<Mutex<GatewayStats>>, updater: F)
+where
+    F: FnOnce(&mut GatewayStats),
+{
+    if let Ok(mut guard) = stats.lock() {
+        updater(&mut guard);
+    }
+}
+
+fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128, stats: Arc<Mutex<GatewayStats>>) {
     let response = match read_http_request(&mut stream) {
         Ok((method, path, headers, body)) => {
+            update_gateway_stats(&stats, |current| {
+                current.request_count += 1;
+            });
             if method == "GET" && path == "/health" {
+                let snapshot = stats.lock().map(|current| current.clone()).unwrap_or_default();
                 let body = json!({
                     "status": "ok",
-                    "gateway": gateway_status_value(config, true, Some(started_at), 0, 0)
+                    "gateway": gateway_status_value(config, true, Some(started_at), snapshot)
                 })
                 .to_string();
                 http_response(200, "application/json", &body)
             } else if !gateway_request_authorized(&headers, config) {
+                update_gateway_stats(&stats, |current| {
+                    current.rejected_count += 1;
+                });
                 http_response(401, "application/json", &json!({ "error": { "message": "Atlas Gateway requires Authorization: Bearer <api key>.", "type": "unauthorized" } }).to_string())
             } else if method == "GET" && path == "/v1/models" {
                 match proxy_http_request(config, "GET", "/v1/models", &[], "application/json") {
                     Ok((status, content_type, body)) => http_response(status, &content_type, &body),
-                    Err(err) => http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string()),
+                    Err(err) => {
+                        update_gateway_stats(&stats, |current| {
+                            current.last_error = Some(err.clone());
+                        });
+                        http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string())
+                    }
                 }
             } else if method == "POST" && (path == "/v1/chat/completions" || path == "/v1/completions") {
                 match serde_json::from_slice::<Value>(&body) {
                     Ok(parsed) => {
                         let estimated = estimate_openai_prompt_tokens(&parsed);
                         let max_prompt = active_max_prompt_tokens(config);
+                        let requested_output = requested_output_tokens(&parsed);
                         let content_type = headers.get("content-type").map(String::as_str).unwrap_or("application/json");
+                        update_gateway_stats(&stats, |current| {
+                            current.last_budget = Some(gateway_budget_value(
+                                estimated <= max_prompt,
+                                estimated,
+                                requested_output,
+                                max_prompt,
+                                if estimated <= max_prompt { "forward" } else if gateway_auto_compression_enabled(config) { "compress" } else { "reject" },
+                                if estimated <= max_prompt { Vec::new() } else { vec![format!("Prompt estimate {} exceeds usable prompt budget {}.", estimated, max_prompt)] },
+                            ));
+                        });
                         if estimated > max_prompt {
                             if gateway_auto_compression_enabled(config) {
+                                update_gateway_stats(&stats, |current| {
+                                    current.compaction_active = true;
+                                });
                                 let (compressed_body, compressed, before, after) = compress_openai_request(parsed, max_prompt);
+                                update_gateway_stats(&stats, |current| {
+                                    current.last_budget = Some(gateway_budget_value(
+                                        compressed && after <= max_prompt,
+                                        after,
+                                        requested_output,
+                                        max_prompt,
+                                        if compressed && after <= max_prompt { "compress" } else { "reject" },
+                                        if compressed && after <= max_prompt { Vec::new() } else { vec![format!("Compressed prompt estimate {} still exceeds usable prompt budget {}.", after, max_prompt)] },
+                                    ));
+                                });
                                 if compressed && after <= max_prompt {
+                                    update_gateway_stats(&stats, |current| {
+                                        current.compressed_count += 1;
+                                        current.last_compression = Some(json!({
+                                            "beforeTokens": before,
+                                            "afterTokens": after,
+                                            "savedTokens": (before - after).max(0),
+                                            "ts": now(),
+                                        }));
+                                    });
                                     match serde_json::to_vec(&compressed_body) {
                                         Ok(body) => match proxy_http_request(config, "POST", &path, &body, content_type) {
                                             Ok((status, content_type, body)) => http_response(status, &content_type, &body),
-                                            Err(err) => http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string()),
+                                            Err(err) => {
+                                                update_gateway_stats(&stats, |current| {
+                                                    current.last_error = Some(err.clone());
+                                                });
+                                                http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string())
+                                            }
                                         },
-                                        Err(err) => http_response(502, "application/json", &json!({ "error": { "message": err.to_string(), "type": "atlas_gateway_compression_error" } }).to_string()),
+                                        Err(err) => {
+                                            update_gateway_stats(&stats, |current| {
+                                                current.last_error = Some(err.to_string());
+                                            });
+                                            http_response(502, "application/json", &json!({ "error": { "message": err.to_string(), "type": "atlas_gateway_compression_error" } }).to_string())
+                                        }
                                     }
                                 } else {
+                                    update_gateway_stats(&stats, |current| {
+                                        current.rejected_count += 1;
+                                    });
                                     http_response(
                                         413,
                                         "application/json",
@@ -1933,6 +2043,9 @@ fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128
                                     )
                                 }
                             } else {
+                                update_gateway_stats(&stats, |current| {
+                                    current.rejected_count += 1;
+                                });
                                 http_response(
                                     413,
                                     "application/json",
@@ -1949,7 +2062,12 @@ fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128
                         } else {
                             match proxy_http_request(config, "POST", &path, &body, content_type) {
                                 Ok((status, content_type, body)) => http_response(status, &content_type, &body),
-                                Err(err) => http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string()),
+                                Err(err) => {
+                                    update_gateway_stats(&stats, |current| {
+                                        current.last_error = Some(err.clone());
+                                    });
+                                    http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string())
+                                }
                             }
                         }
                     }
@@ -1961,10 +2079,13 @@ fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128
         }
         Err(err) => http_response(400, "application/json", &json!({ "error": { "message": err, "type": "invalid_request_error" } }).to_string()),
     };
+    update_gateway_stats(&stats, |current| {
+        current.compaction_active = false;
+    });
     let _ = stream.write_all(&response);
 }
 
-fn gateway_status_value(config: &Value, running: bool, started_at: Option<u128>, request_count: i64, rejected_count: i64) -> Value {
+fn gateway_status_value(config: &Value, running: bool, started_at: Option<u128>, stats: GatewayStats) -> Value {
     let host = string_at(config, &["agentRuntime", "gateway", "host"]);
     let port = number_at(config, &["agentRuntime", "gateway", "port"], 18080);
     json!({
@@ -1976,14 +2097,18 @@ fn gateway_status_value(config: &Value, running: bool, started_at: Option<u128>,
         "modelAlias": string_at(config, &["agentRuntime", "gateway", "modelAlias"]),
         "activeProfileId": string_at(config, &["agentRuntime", "activeProfileId"]),
         "startedAt": started_at,
-        "requestCount": request_count,
-        "rejectedCount": rejected_count,
-        "compressedCount": 0
+        "requestCount": stats.request_count,
+        "rejectedCount": stats.rejected_count,
+        "compressedCount": stats.compressed_count,
+        "compactionActive": stats.compaction_active,
+        "lastCompression": stats.last_compression,
+        "lastError": stats.last_error,
+        "lastBudget": stats.last_budget
     })
 }
 
 fn external_gateway_status(config: &Value) -> Value {
-    let base = gateway_status_value(config, false, None, 0, 0);
+    let base = gateway_status_value(config, false, None, GatewayStats::default());
     let host = string_at(config, &["agentRuntime", "gateway", "host"]);
     let port = number_at(config, &["agentRuntime", "gateway", "port"], 18080);
     let Ok((status, body)) = http_get_text(&host, port, "/health", Duration::from_millis(1000)) else {
@@ -2014,25 +2139,30 @@ fn gateway_start(state: State<AppState>) -> Result<Value, AppError> {
     {
         let gateway = state.gateway.lock().map_err(|_| app_error("agent-gateway", "Gateway state unavailable", "Could not lock gateway state.", "Restart Atlas Workbench and try again."))?;
         if gateway.is_some() {
-            return Ok(gateway_status_value(&config, true, gateway.as_ref().map(|g| g.started_at), 0, 0));
+            let stats = state.gateway_stats.lock().map(|current| current.clone()).unwrap_or_default();
+            return Ok(gateway_status_value(&config, true, gateway.as_ref().map(|g| g.started_at), stats));
         }
     }
     let external = external_gateway_status(&config);
     if external.get("running").and_then(Value::as_bool).unwrap_or(false) {
         return Ok(external);
     }
+    if let Ok(mut stats) = state.gateway_stats.lock() {
+        *stats = GatewayStats::default();
+    }
     let listener = TcpListener::bind(format!("{}:{}", host, port)).map_err(|e| app_error("agent-gateway", "Could not start Atlas Gateway", e.to_string(), "Choose a different gateway port or stop the process already using it."))?;
     listener.set_nonblocking(true).map_err(|e| app_error("agent-gateway", "Could not configure Atlas Gateway", e.to_string(), "Restart Atlas Workbench and try again."))?;
     let (tx, rx) = mpsc::channel::<()>();
     let started_at = now();
     let thread_config = config.clone();
+    let thread_stats = state.gateway_stats.clone();
     thread::spawn(move || {
         loop {
             if rx.try_recv().is_ok() {
                 break;
             }
             match listener.accept() {
-                Ok((stream, _addr)) => handle_gateway_stream(stream, &thread_config, started_at),
+                Ok((stream, _addr)) => handle_gateway_stream(stream, &thread_config, started_at, thread_stats.clone()),
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(50)),
                 Err(_) => thread::sleep(Duration::from_millis(100)),
             }
@@ -2040,7 +2170,8 @@ fn gateway_start(state: State<AppState>) -> Result<Value, AppError> {
     });
     let mut gateway = state.gateway.lock().map_err(|_| app_error("agent-gateway", "Gateway state unavailable", "Could not lock gateway state.", "Restart Atlas Workbench and try again."))?;
     *gateway = Some(GatewayRuntime { shutdown: tx, started_at, host, port });
-    Ok(gateway_status_value(&config, true, Some(started_at), 0, 0))
+    let stats = state.gateway_stats.lock().map(|current| current.clone()).unwrap_or_default();
+    Ok(gateway_status_value(&config, true, Some(started_at), stats))
 }
 
 #[tauri::command]
@@ -2049,7 +2180,9 @@ fn gateway_stop(state: State<AppState>) -> Result<Value, AppError> {
     let mut gateway = state.gateway.lock().map_err(|_| app_error("agent-gateway", "Gateway state unavailable", "Could not lock gateway state.", "Restart Atlas Workbench and try again."))?;
     if let Some(runtime) = gateway.take() {
         let _ = runtime.shutdown.send(());
-        return Ok(gateway_status_value(&config, false, None, 0, 0));
+        let mut stats = state.gateway_stats.lock().map(|current| current.clone()).unwrap_or_default();
+        stats.compaction_active = false;
+        return Ok(gateway_status_value(&config, false, None, stats));
     }
     Ok(external_gateway_status(&config))
 }
@@ -2059,7 +2192,8 @@ fn gateway_status(state: State<AppState>) -> Result<Value, AppError> {
     let config = load_config_value()?;
     let gateway = state.gateway.lock().map_err(|_| app_error("agent-gateway", "Gateway state unavailable", "Could not lock gateway state.", "Restart Atlas Workbench and try again."))?;
     let started_at = gateway.as_ref().map(|g| g.started_at);
-    let mut status = gateway_status_value(&config, gateway.is_some(), started_at, 0, 0);
+    let stats = state.gateway_stats.lock().map(|current| current.clone()).unwrap_or_default();
+    let mut status = gateway_status_value(&config, gateway.is_some(), started_at, stats);
     if let (Some(runtime), Some(obj)) = (gateway.as_ref(), status.as_object_mut()) {
         obj.insert("host".to_string(), json!(runtime.host.clone()));
         obj.insert("port".to_string(), json!(runtime.port));
@@ -2379,6 +2513,70 @@ fn collect_runtime_metrics(config: &Value, previous: Option<RuntimeCounterSample
     }), baseline))
 }
 
+fn read_cpu_ticks() -> Option<CpuTickSample> {
+    let raw = fs::read_to_string("/proc/stat").ok()?;
+    let per_core = raw
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let name = parts.next()?;
+            if !name.starts_with("cpu") || name == "cpu" || !name[3..].chars().all(|ch| ch.is_ascii_digit()) {
+                return None;
+            }
+            let user = parts.next()?.parse::<u64>().ok()?;
+            let nice = parts.next()?.parse::<u64>().ok()?;
+            let system = parts.next()?.parse::<u64>().ok()?;
+            let idle = parts.next()?.parse::<u64>().ok()?;
+            let iowait = parts.next().and_then(|value| value.parse::<u64>().ok()).unwrap_or(0);
+            let irq = parts.next().and_then(|value| value.parse::<u64>().ok()).unwrap_or(0);
+            let softirq = parts.next().and_then(|value| value.parse::<u64>().ok()).unwrap_or(0);
+            let steal = parts.next().and_then(|value| value.parse::<u64>().ok()).unwrap_or(0);
+            let idle_all = idle + iowait;
+            let total = user + nice + system + idle_all + irq + softirq + steal;
+            Some(CpuTicks { idle: idle_all, total })
+        })
+        .collect::<Vec<_>>();
+    if per_core.is_empty() {
+        None
+    } else {
+        Some(CpuTickSample { per_core })
+    }
+}
+
+fn cpu_metrics_from_delta(previous: &CpuTickSample, current: &CpuTickSample) -> (f64, Vec<f64>) {
+    let per_core = previous
+        .per_core
+        .iter()
+        .zip(current.per_core.iter())
+        .map(|(prev, curr)| {
+            let total_delta = curr.total.saturating_sub(prev.total);
+            let idle_delta = curr.idle.saturating_sub(prev.idle);
+            if total_delta == 0 {
+                0.0
+            } else {
+                (((total_delta.saturating_sub(idle_delta)) as f64 / total_delta as f64) * 100.0).clamp(0.0, 100.0)
+            }
+        })
+        .collect::<Vec<_>>();
+    let overall = if per_core.is_empty() { 0.0 } else { per_core.iter().sum::<f64>() / per_core.len() as f64 };
+    (overall, per_core)
+}
+
+fn collect_cpu_metrics(state: &State<AppState>) -> (f64, Vec<f64>) {
+    let Some(current) = read_cpu_ticks() else {
+        return (0.0, Vec::new());
+    };
+    let Ok(mut guard) = state.cpu_sample.lock() else {
+        return (0.0, Vec::new());
+    };
+    let metrics = guard
+        .as_ref()
+        .map(|previous| cpu_metrics_from_delta(previous, &current))
+        .unwrap_or_else(|| (0.0, vec![0.0; current.per_core.len()]));
+    *guard = Some(current);
+    metrics
+}
+
 fn read_process_metrics(state: &State<AppState>, pid: usize, name: &str) -> Value {
     const CLK_TCK: f64 = 100.0;
     const PAGE_SIZE: u64 = 4096;
@@ -2456,9 +2654,7 @@ fn monitor_collect(state: State<AppState>, pids: Option<Vec<Value>>) -> Value {
     }
     let mut system = System::new_all();
     system.refresh_all();
-    let cpus = system.cpus();
-    let per_core: Vec<f32> = cpus.iter().map(|c| c.cpu_usage()).collect();
-    let overall = if per_core.is_empty() { 0.0 } else { per_core.iter().sum::<f32>() / per_core.len() as f32 };
+    let (overall, per_core) = collect_cpu_metrics(&state);
     let total = system.total_memory();
     let used = system.used_memory();
     let mut processes = Vec::new();

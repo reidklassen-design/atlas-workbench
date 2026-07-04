@@ -143,8 +143,10 @@ export class AtlasGateway {
   private requestCount = 0;
   private rejectedCount = 0;
   private compressedCount = 0;
+  private compactionActive = false;
   private lastError?: string;
   private lastBudget?: TokenBudgetResult;
+  private lastCompression?: GatewayStatus["lastCompression"];
 
   constructor(fetchImpl: typeof fetch = fetch) {
     this.fetchImpl = fetchImpl;
@@ -162,8 +164,10 @@ export class AtlasGateway {
     this.requestCount = 0;
     this.rejectedCount = 0;
     this.compressedCount = 0;
+    this.compactionActive = false;
     this.lastError = undefined;
     this.lastBudget = undefined;
+    this.lastCompression = undefined;
     const gateway = options.config.agentRuntime.gateway;
     this.server = createServer((req, res) => {
       void this.handleRequest(req, res).catch((err) => {
@@ -213,6 +217,8 @@ export class AtlasGateway {
       requestCount: this.requestCount,
       rejectedCount: this.rejectedCount,
       compressedCount: this.compressedCount,
+      compactionActive: this.compactionActive,
+      lastCompression: this.lastCompression,
       lastError: this.lastError,
       lastBudget: this.lastBudget,
     };
@@ -252,14 +258,26 @@ export class AtlasGateway {
       this.lastBudget = budget;
       if (!budget.ok) {
         if (budget.action === "compress" || this.config.agentRuntime.gateway.autoCompressionEnabled) {
+          this.compactionActive = true;
           const compressed = compressOpenAiRequest(parsed, budget.usablePromptTokens);
           const compressedBudget = evaluateTokenBudget(budgetInputFromOpenAiRequest(compressed.body), profile.requestPolicy);
           this.lastBudget = compressedBudget;
           if (compressed.compressed && compressedBudget.ok) {
             this.compressedCount += 1;
-            await proxyFetch(this.fetchImpl, `${urlBase(this.config.server.host, this.config.server.port)}${path}`, req, res, JSON.stringify(compressed.body));
+            this.lastCompression = {
+              beforeTokens: budget.estimatedPromptTokens,
+              afterTokens: compressedBudget.estimatedPromptTokens,
+              savedTokens: Math.max(0, budget.estimatedPromptTokens - compressedBudget.estimatedPromptTokens),
+              ts: Date.now(),
+            };
+            try {
+              await proxyFetch(this.fetchImpl, `${urlBase(this.config.server.host, this.config.server.port)}${path}`, req, res, JSON.stringify(compressed.body));
+            } finally {
+              this.compactionActive = false;
+            }
             return;
           }
+          this.compactionActive = false;
         }
         this.rejectedCount += 1;
         sendJson(res, 413, {

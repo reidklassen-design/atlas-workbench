@@ -1,5 +1,4 @@
 import { useControllerState } from "@/state/reactBinding";
-import { clsx } from "clsx";
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
@@ -11,11 +10,11 @@ function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function Bar({ value, color = "bg-accent" }: { value: number; color?: string }): JSX.Element {
+function Bar({ value, color = "#39FF14", testId }: { value: number; color?: string; testId?: string }): JSX.Element {
   const pct = Math.max(0, Math.min(100, value));
   return (
-    <div className="h-2 w-full rounded-full bg-slate-700">
-      <div className={clsx("h-2 rounded-full transition-all", color)} style={{ width: `${pct}%` }} />
+    <div className="h-2 w-full rounded-full bg-[#263545]" data-testid={testId}>
+      <div className="h-2 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color, boxShadow: `0 0 14px ${color}66` }} />
     </div>
   );
 }
@@ -31,10 +30,11 @@ export function SystemMonitorTab(): JSX.Element {
     );
   }
 
-  const ramColor = metrics.ram.percent > 90 ? "bg-err" : metrics.ram.percent > 70 ? "bg-warn" : "bg-ok";
+  const ramColor = metrics.ram.percent > 90 ? "#FF4D4D" : metrics.ram.percent > 70 ? "#FFD166" : "#39FF14";
   const gpuUsage = finiteNumber(metrics.gpu.usagePercent);
   const gpuMemoryTotal = finiteNumber(metrics.gpu.memoryTotal);
   const gpuMemoryUsed = finiteNumber(metrics.gpu.memoryUsed);
+  const gpuMemoryPercent = gpuMemoryUsed !== undefined && gpuMemoryTotal ? Math.max(0, Math.min(100, (gpuMemoryUsed / gpuMemoryTotal) * 100)) : undefined;
   const gpuTemperature = finiteNumber(metrics.gpu.temperatureCelsius);
 
   return (
@@ -45,7 +45,7 @@ export function SystemMonitorTab(): JSX.Element {
             <h2 className="text-sm font-semibold uppercase tracking-wide text-accent">CPU</h2>
             <span className="text-2xl font-semibold text-white" data-testid="cpu-overall">{metrics.cpu.overall.toFixed(1)}%</span>
           </div>
-          <Bar value={metrics.cpu.overall} />
+          <Bar value={metrics.cpu.overall} testId="cpu-bar" />
           <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-8" data-testid="cpu-cores">
             {metrics.cpu.perCore.map((core, i) => (
               <div key={i} className="rounded bg-panel p-1 text-center">
@@ -61,7 +61,7 @@ export function SystemMonitorTab(): JSX.Element {
             <h2 className="text-sm font-semibold uppercase tracking-wide text-accent">RAM</h2>
             <span className="text-2xl font-semibold text-white" data-testid="ram-overall">{metrics.ram.percent.toFixed(1)}%</span>
           </div>
-          <Bar value={metrics.ram.percent} color={ramColor} />
+          <Bar value={metrics.ram.percent} color={ramColor} testId="ram-bar" />
           <p className="mt-3 text-sm text-slate-300" data-testid="ram-detail">
             {formatBytes(metrics.ram.used)} used of {formatBytes(metrics.ram.total)}
           </p>
@@ -73,10 +73,16 @@ export function SystemMonitorTab(): JSX.Element {
         {metrics.gpu.detected ? (
           <div data-testid="gpu-metrics">
             <p className="text-sm text-slate-200">{metrics.gpu.name ?? "GPU"}</p>
+            {gpuMemoryPercent !== undefined ? (
+              <div className="mt-2">
+                <div className="flex justify-between text-xs text-slate-400"><span>VRAM usage</span><span>{gpuMemoryPercent.toFixed(0)}%</span></div>
+                <Bar value={gpuMemoryPercent} color="#39FF14" testId="gpu-vram-bar" />
+              </div>
+            ) : null}
             {gpuUsage !== undefined ? (
               <div className="mt-2">
-                <div className="flex justify-between text-xs text-slate-400"><span>Utilization</span><span>{gpuUsage.toFixed(0)}%</span></div>
-                <Bar value={gpuUsage} color="bg-accent2" />
+                <div className="flex justify-between text-xs text-slate-400"><span>GPU load</span><span>{gpuUsage.toFixed(0)}%</span></div>
+                <Bar value={gpuUsage} color="#7CFF2B" testId="gpu-load-bar" />
               </div>
             ) : null}
             {gpuMemoryTotal !== undefined ? (

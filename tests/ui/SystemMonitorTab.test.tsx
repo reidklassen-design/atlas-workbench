@@ -31,6 +31,10 @@ describe("SystemMonitorTab", () => {
     });
     const { controller } = await renderApp(<SystemMonitorTab />, handlers);
     expect(screen.getByTestId("gpu-metrics").textContent).toMatch(/AMD Radeon/);
+    expect(screen.getByTestId("gpu-metrics").textContent).toMatch(/VRAM usage/);
+    expect(screen.getByTestId("gpu-metrics").textContent).toMatch(/25%/);
+    expect(screen.getByTestId("gpu-metrics").textContent).toMatch(/GPU load/);
+    expect(screen.getByTestId("gpu-metrics").textContent).toMatch(/55%/);
     expect(screen.getByTestId("gpu-temperature").textContent).toMatch(/63 °C/);
     controller.dispose();
   });

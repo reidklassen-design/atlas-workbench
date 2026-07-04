@@ -319,7 +319,6 @@ function NeoHeader({ server, gateway }: { server: ProcessStatus; gateway: Gatewa
   return (
     <header className="neo-header" data-tauri-drag-region onMouseDown={startWindowDrag} onDoubleClick={toggleWindowMaximize}>
       <div className="neo-header-left">
-        <button type="button" className="neo-icon-button" aria-label="Menu" data-no-drag>☰</button>
         <span className="neo-pill">LOCAL MODE</span>
       </div>
       <div className="neo-brand" aria-label="Atlas Core">
@@ -341,7 +340,7 @@ function NeoHeader({ server, gateway }: { server: ProcessStatus; gateway: Gatewa
   );
 }
 
-function NeoSidebar({ active, onSelect, server }: { active: TabId; onSelect: (tab: TabId) => void; server: ProcessStatus }): JSX.Element {
+function NeoSidebar({ active, onSelect }: { active: TabId; onSelect: (tab: TabId) => void }): JSX.Element {
   return (
     <aside className="neo-sidebar" aria-label="Primary navigation">
       <div className="neo-sidebar-rail" aria-hidden="true" />
@@ -359,17 +358,6 @@ function NeoSidebar({ active, onSelect, server }: { active: TabId; onSelect: (ta
           </button>
         ))}
       </nav>
-      <div className="neo-sidebar-status">
-        <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-[#8FA99A]">
-          <span className={clsx("h-2 w-2 rounded-full", statusTone(server.state))} />
-          System Status
-        </div>
-        <div className="mt-4 text-2xl font-semibold uppercase text-[#39FF14]">{server.state === "running" ? "Online" : server.state}</div>
-        <p className="mt-2 text-sm text-[#8FA99A]">{server.state === "running" ? "All systems operational." : "Local runtime standing by."}</p>
-        <div className="mt-4 flex gap-1" aria-hidden="true">
-          {[0, 1, 2, 3, 4].map((item) => <span key={item} className="h-1.5 w-5 skew-x-[-32deg] rounded-sm bg-[#7CFF2B]" />)}
-        </div>
-      </div>
     </aside>
   );
 }
@@ -377,31 +365,56 @@ function NeoSidebar({ active, onSelect, server }: { active: TabId; onSelect: (ta
 function NeoBottomBar({ config, metrics, server, gateway }: { config: AppConfig; metrics: SystemMetrics | null; server: ProcessStatus; gateway: GatewayStatus }): JSX.Element {
   const activeProfile = config.agentRuntime.profiles.find((profile) => profile.id === config.agentRuntime.activeProfileId);
   const contextWindow = Number(activeProfile?.requestPolicy.contextWindowTokens ?? config.serverFlags["ctx-size"] ?? 0);
-  const usedContext = gateway.lastBudget?.estimatedPromptTokens ?? 0;
-  const pct = contextWindow > 0 ? Math.max(0, Math.min(100, (usedContext / contextWindow) * 100)) : 0;
+  const usableContext = Number(gateway.lastBudget?.usablePromptTokens ?? activeProfile?.requestPolicy.maxPromptTokens ?? contextWindow ?? 0);
+  const usedContext = Number(gateway.lastBudget?.estimatedPromptTokens ?? 0);
+  const pct = usableContext > 0 ? Math.max(0, Math.min(100, (usedContext / usableContext) * 100)) : 0;
   const sessionName = activeProfile?.name ?? formatModelName(config.model.selectedModel);
-  const status = gateway.running ? "Gateway online" : server.state === "running" ? "llama.cpp online" : "Runtime idle";
+  const runtimeStatus = gateway.running ? "Gateway online" : server.state === "running" ? "llama.cpp online" : "Runtime idle";
+  const compressionStatus = gateway.compactionActive
+    ? "Compacting now"
+    : gateway.lastCompression
+      ? `Last compacted ${gateway.lastCompression.beforeTokens.toLocaleString()} -> ${gateway.lastCompression.afterTokens.toLocaleString()}`
+      : config.agentRuntime.gateway.autoCompressionEnabled
+        ? "Compression ready"
+        : "Compression off";
+  const contextTone = gateway.compactionActive || gateway.lastBudget?.action === "compress"
+    ? "#FFD166"
+    : gateway.lastBudget && !gateway.lastBudget.ok
+      ? "#FF4D4D"
+      : "#39FF14";
+  const networkDetail = [
+    runtimeStatus,
+    gateway.running ? `${gateway.host}:${gateway.port}` : null,
+    metrics?.gpu.detected ? metrics.gpu.name ?? "GPU detected" : "GPU telemetry pending",
+  ].filter(Boolean).join(" · ");
 
   return (
     <footer className="neo-bottom-bar">
       <div className="min-w-0">
-        <div className="text-xs uppercase text-[#8FA99A]">Active Session</div>
-        <div className="truncate text-sm font-semibold text-[#E8FFF0]">Chat with {sessionName}</div>
+        <div className="text-xs uppercase text-[#8FA99A]">Active Profile</div>
+        <div className="truncate text-sm font-semibold text-[#E8FFF0]">{sessionName}</div>
       </div>
       <div className="min-w-[220px] flex-1">
         <div className="mb-1 flex justify-between text-xs text-[#8FA99A]">
           <span>Context Usage</span>
-          <span>{usedContext.toLocaleString()} / {contextWindow ? contextWindow.toLocaleString() : "--"} tokens</span>
+          <span>{usedContext.toLocaleString()} / {usableContext ? usableContext.toLocaleString() : "--"} prompt tokens</span>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-[#102A1B]">
-          <div className="h-full rounded-full bg-[#39FF14] shadow-[0_0_16px_rgba(57,255,20,0.65)]" style={{ width: `${pct}%` }} />
+          <div className="h-full rounded-full shadow-[0_0_16px_rgba(57,255,20,0.65)]" style={{ width: `${pct}%`, backgroundColor: contextTone }} />
+        </div>
+        <div className="mt-1 flex justify-between gap-3 text-[0.68rem] uppercase tracking-wide text-[#8FA99A]">
+          <span>{compressionStatus}</span>
+          <span>{contextWindow ? `${contextWindow.toLocaleString()} window` : "context window unknown"}</span>
         </div>
       </div>
-      <div className="hidden text-right text-xs text-[#8FA99A] lg:block">
-        <div>{status}</div>
-        <div>{metrics?.gpu.detected ? metrics.gpu.name ?? "GPU detected" : "GPU telemetry pending"}</div>
+      <div className="neo-network-status" aria-label="Runtime network status">
+        <div className="flex items-center justify-end gap-2 text-xs uppercase tracking-wide text-[#8FA99A]">
+          <span className={clsx("h-2 w-2 rounded-full", statusTone(gateway.running || server.state === "running" ? "running" : server.state))} />
+          System Status
+        </div>
+        <div className="mt-1 text-right text-sm font-semibold uppercase text-[#39FF14]">{gateway.running || server.state === "running" ? "Online" : server.state}</div>
+        <div className="mt-1 text-right text-xs text-[#8FA99A]">{networkDetail}</div>
       </div>
-      <button type="button" className="neo-action-button">New Chat</button>
     </footer>
   );
 }
@@ -601,7 +614,7 @@ export function Shell(): JSX.Element {
     <div className="neo-shell">
       <NeoHeader server={server} gateway={gateway} />
       <div className="neo-body">
-        <NeoSidebar active={active} onSelect={setActive} server={server} />
+          <NeoSidebar active={active} onSelect={setActive} />
         <main className="neo-main">
           {loaded ? (
             <div className="mx-auto max-w-[1500px]">

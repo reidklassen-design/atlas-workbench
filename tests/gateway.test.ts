@@ -152,8 +152,12 @@ describe("AtlasGateway", () => {
       max_tokens: 1024,
     });
     expect(result.status).toBe(200);
-    expect(gateway.status().compressedCount).toBe(1);
-    expect(gateway.status().rejectedCount).toBe(0);
+    const status = gateway.status();
+    expect(status.compressedCount).toBe(1);
+    expect(status.rejectedCount).toBe(0);
+    expect(status.compactionActive).toBe(false);
+    expect(status.lastCompression?.beforeTokens).toBeGreaterThan(status.lastCompression?.afterTokens ?? 0);
+    expect(status.lastBudget?.estimatedPromptTokens).toBeLessThanOrEqual(status.lastBudget?.usablePromptTokens ?? 0);
     expect(seenBodies[0]).toContain("Atlas automatic compression");
   });
 

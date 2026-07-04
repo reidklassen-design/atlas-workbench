@@ -228,6 +228,13 @@ export interface GatewayStatus {
   requestCount: number;
   rejectedCount: number;
   compressedCount?: number;
+  compactionActive?: boolean;
+  lastCompression?: {
+    beforeTokens: number;
+    afterTokens: number;
+    savedTokens: number;
+    ts: number;
+  };
   lastError?: string;
   lastBudget?: {
     ok: boolean;

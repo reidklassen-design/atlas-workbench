@@ -442,8 +442,12 @@ export class AppController {
     if (this.server.state === "running" && this.server.pid) pids.push({ pid: this.server.pid, name: "llama-server" });
     if (this.training.state === "running" && this.training.pid) pids.push({ pid: this.training.pid, name: "llama-finetune" });
     try {
-      const metrics = await this.invoke<SystemMetrics>("monitor.collect", { pids });
+      const [metrics, gateway] = await Promise.all([
+        this.invoke<SystemMetrics>("monitor.collect", { pids }),
+        this.invoke<GatewayStatus>("gateway.status").catch(() => null),
+      ]);
       this.metrics = metrics;
+      if (gateway) this.gateway = gateway;
       this.notify();
       return metrics;
     } catch (err) {

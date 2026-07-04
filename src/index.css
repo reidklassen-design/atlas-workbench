@@ -231,19 +231,6 @@
     font-size: 1.15rem;
     clip-path: polygon(50% 0, 92% 25%, 92% 75%, 50% 100%, 8% 75%, 8% 25%);
   }
-  .neo-sidebar-status {
-    position: absolute;
-    right: 0.85rem;
-    bottom: 1rem;
-    left: 0.85rem;
-    border: 1px solid rgba(47, 107, 37, 0.62);
-    border-radius: 0.55rem;
-    background:
-      linear-gradient(135deg, rgba(57, 255, 20, 0.08), transparent 46%),
-      rgba(5, 13, 8, 0.86);
-    padding: 1rem;
-    box-shadow: 0 0 24px rgba(57, 255, 20, 0.08), inset 0 1px 0 rgba(232, 255, 240, 0.035);
-  }
   .neo-main {
     min-width: 0;
     flex: 1;
@@ -456,19 +443,15 @@
     padding: 0.62rem 0.7rem;
     font-size: 0.82rem;
   }
-  .neo-action-button {
-    display: inline-flex;
-    min-height: 2.45rem;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid rgba(124, 255, 43, 0.65);
+  .neo-network-status {
+    min-width: 13.5rem;
+    border: 1px solid rgba(47, 107, 37, 0.62);
     border-radius: 0.55rem;
-    background: linear-gradient(180deg, #7cff2b, #39ff14);
-    padding: 0.55rem 0.95rem;
-    color: #031006;
-    font-size: 0.85rem;
-    font-weight: 800;
-    box-shadow: 0 0 24px rgba(57, 255, 20, 0.22);
+    background:
+      linear-gradient(135deg, rgba(57, 255, 20, 0.08), transparent 46%),
+      rgba(5, 13, 8, 0.86);
+    padding: 0.62rem 0.78rem;
+    box-shadow: 0 0 24px rgba(57, 255, 20, 0.08), inset 0 1px 0 rgba(232, 255, 240, 0.035);
   }
   .tab-active {
     @apply border-accent bg-white/[0.03] text-white;

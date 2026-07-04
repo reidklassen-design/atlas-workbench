@@ -13,6 +13,9 @@ describe("App shell", () => {
     expect(screen.getByTestId("tab-fine-tuning")).toBeDefined();
     expect(screen.getByTestId("tab-system-monitor")).toBeDefined();
     expect(screen.getByTestId("tab-agent-runtime")).toBeDefined();
+    expect(screen.getByTestId("tab-logs")).toBeDefined();
+    expect(screen.queryByLabelText("Menu")).toBeNull();
+    expect(screen.queryByText("New Chat")).toBeNull();
 
     await userEvent.click(screen.getByTestId("tab-system-monitor"));
     expect(screen.getByTestId("gpu-not-detected")).toBeDefined();
@@ -43,6 +46,42 @@ describe("App shell", () => {
     expect(screen.getByTestId("dashboard").textContent).toContain("61");
     expect(screen.getByText(/Tokens\/sec: 72.4 tok\/s/i)).toBeDefined();
     expect(screen.getByText(/GPU temp: 61 °C/i)).toBeDefined();
+    controller.dispose();
+  });
+
+  it("shows live gateway context budget and compaction status in the bottom bar", async () => {
+    const handlers = baselineHandlers({
+      "gateway.status": () => ({
+        running: true,
+        external: false,
+        host: "127.0.0.1",
+        port: 18080,
+        upstream: "http://127.0.0.1:8099",
+        modelAlias: "atlas/local",
+        activeProfileId: "3090-ti-ornith-35b-96k-always-on",
+        requestCount: 3,
+        rejectedCount: 0,
+        compressedCount: 1,
+        compactionActive: true,
+        lastCompression: { beforeTokens: 120000, afterTokens: 60000, savedTokens: 60000, ts: Date.now() },
+        lastBudget: {
+          ok: true,
+          estimatedPromptTokens: 60000,
+          requestedOutputTokens: 1024,
+          usablePromptTokens: 77824,
+          overflowTokens: 0,
+          action: "compress",
+          reasons: [],
+        },
+      }),
+    });
+    const { controller } = await renderApp(<Shell />, handlers);
+
+    expect(screen.getByText("Context Usage")).toBeDefined();
+    expect(screen.getByText(/60,000 \/ 77,824 prompt tokens/i)).toBeDefined();
+    expect(screen.getByText("Compacting now")).toBeDefined();
+    expect(screen.getByText("System Status")).toBeDefined();
+    expect(screen.getAllByText("Online").length).toBeGreaterThan(0);
     controller.dispose();
   });
 
