@@ -334,7 +334,8 @@ fn default_agent_runtime_config() -> Value {
             "host": "127.0.0.1",
             "port": 18080,
             "apiKey": "atlas-local",
-            "modelAlias": "atlas/3090-ti-ornith-35b-125k-stable"
+            "modelAlias": "atlas/3090-ti-ornith-35b-125k-stable",
+            "autoCompressionEnabled": true
         },
         "profiles": default_agent_runtime_profiles()
     })
@@ -1610,6 +1611,65 @@ fn estimate_openai_prompt_tokens(body: &Value) -> i64 {
     estimate_tokens(&text)
 }
 
+fn truncate_for_token_budget(text: &str, target_tokens: i64) -> String {
+    if estimate_tokens(text) <= target_tokens {
+        return text.to_string();
+    }
+    let char_budget = (target_tokens.max(100) * 4) as usize;
+    if text.len() <= char_budget {
+        return text.to_string();
+    }
+    let head_chars = ((char_budget as f64) * 0.58).floor() as usize;
+    let tail_chars = ((char_budget as f64) * 0.32).floor() as usize;
+    let omitted = text.len().saturating_sub(head_chars + tail_chars);
+    let head = text.chars().take(head_chars).collect::<String>();
+    let tail_len = tail_chars.min(text.chars().count());
+    let tail = text.chars().rev().take(tail_len).collect::<String>().chars().rev().collect::<String>();
+    format!(
+        "{}\n\n[Atlas automatic compression: omitted {} middle characters to keep this local request inside the active context budget.]\n\n{}",
+        head.trim_end(),
+        omitted,
+        tail.trim_start()
+    )
+}
+
+fn compress_openai_request(mut body: Value, max_prompt_tokens: i64) -> (Value, bool, i64, i64) {
+    let before = estimate_openai_prompt_tokens(&body);
+    let target = ((max_prompt_tokens as f64) * 0.82).floor().max(1024.0) as i64;
+    let mut compressed = false;
+
+    if let Some(prompt) = body.get("prompt").and_then(Value::as_str) {
+        let clipped = truncate_for_token_budget(prompt, target);
+        if clipped != prompt {
+            compressed = true;
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert("prompt".to_string(), json!(clipped));
+            }
+        }
+    }
+
+    if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
+        let per_message_budget = (target / ((messages.len() as i64) + 1)).max(768);
+        for message in messages.iter_mut() {
+            if let Some(content) = message.get("content").cloned() {
+                let original = text_from_json(&content);
+                if !original.is_empty() {
+                    let clipped = truncate_for_token_budget(&original, per_message_budget);
+                    if clipped != original {
+                        compressed = true;
+                        if let Some(obj) = message.as_object_mut() {
+                            obj.insert("content".to_string(), json!(clipped));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let after = estimate_openai_prompt_tokens(&body);
+    (body, compressed, before, after)
+}
+
 fn active_profile(config: &Value) -> Option<Value> {
     let id = string_at(config, &["agentRuntime", "activeProfileId"]);
     find_runtime_profile(config, &id).or_else(|| find_runtime_profile(config, "3090-ti-ornith-35b-125k-stable"))
@@ -1619,6 +1679,12 @@ fn active_max_prompt_tokens(config: &Value) -> i64 {
     active_profile(config)
         .and_then(|profile| profile.get("requestPolicy").and_then(|policy| policy.get("maxPromptTokens")).and_then(Value::as_i64).or(Some(104520)))
         .unwrap_or(104520)
+}
+
+fn gateway_auto_compression_enabled(config: &Value) -> bool {
+    value_at(config, &["agentRuntime", "gateway", "autoCompressionEnabled"])
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 fn http_response(status: u16, content_type: &str, body: &str) -> Vec<u8> {
@@ -1750,21 +1816,47 @@ fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128
                     Ok(parsed) => {
                         let estimated = estimate_openai_prompt_tokens(&parsed);
                         let max_prompt = active_max_prompt_tokens(config);
+                        let content_type = headers.get("content-type").map(String::as_str).unwrap_or("application/json");
                         if estimated > max_prompt {
-                            http_response(
-                                413,
-                                "application/json",
-                                &json!({
-                                    "error": {
-                                        "message": format!("Atlas blocked this request before llama.cpp because the prompt estimate {} exceeds the active profile budget {}.", estimated, max_prompt),
-                                        "type": "atlas_context_budget_exceeded",
-                                        "budget": { "estimatedPromptTokens": estimated, "usablePromptTokens": max_prompt, "overflowTokens": estimated - max_prompt }
+                            if gateway_auto_compression_enabled(config) {
+                                let (compressed_body, compressed, before, after) = compress_openai_request(parsed, max_prompt);
+                                if compressed && after <= max_prompt {
+                                    match serde_json::to_vec(&compressed_body) {
+                                        Ok(body) => match proxy_http_request(config, "POST", &path, &body, content_type) {
+                                            Ok((status, content_type, body)) => http_response(status, &content_type, &body),
+                                            Err(err) => http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string()),
+                                        },
+                                        Err(err) => http_response(502, "application/json", &json!({ "error": { "message": err.to_string(), "type": "atlas_gateway_compression_error" } }).to_string()),
                                     }
-                                })
-                                .to_string(),
-                            )
+                                } else {
+                                    http_response(
+                                        413,
+                                        "application/json",
+                                        &json!({
+                                            "error": {
+                                                "message": format!("Atlas could not compress this request enough to fit the active profile budget. Estimate went from {} to {}, budget {}.", before, after, max_prompt),
+                                                "type": "atlas_context_budget_exceeded",
+                                                "budget": { "estimatedPromptTokens": after, "estimatedBeforeCompressionTokens": before, "usablePromptTokens": max_prompt, "overflowTokens": after - max_prompt }
+                                            }
+                                        })
+                                        .to_string(),
+                                    )
+                                }
+                            } else {
+                                http_response(
+                                    413,
+                                    "application/json",
+                                    &json!({
+                                        "error": {
+                                            "message": format!("Atlas blocked this request before llama.cpp because the prompt estimate {} exceeds the active profile budget {}.", estimated, max_prompt),
+                                            "type": "atlas_context_budget_exceeded",
+                                            "budget": { "estimatedPromptTokens": estimated, "usablePromptTokens": max_prompt, "overflowTokens": estimated - max_prompt }
+                                        }
+                                    })
+                                    .to_string(),
+                                )
+                            }
                         } else {
-                            let content_type = headers.get("content-type").map(String::as_str).unwrap_or("application/json");
                             match proxy_http_request(config, "POST", &path, &body, content_type) {
                                 Ok((status, content_type, body)) => http_response(status, &content_type, &body),
                                 Err(err) => http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string()),
@@ -1794,7 +1886,8 @@ fn gateway_status_value(config: &Value, running: bool, started_at: Option<u128>,
         "activeProfileId": string_at(config, &["agentRuntime", "activeProfileId"]),
         "startedAt": started_at,
         "requestCount": request_count,
-        "rejectedCount": rejected_count
+        "rejectedCount": rejected_count,
+        "compressedCount": 0
     })
 }
 

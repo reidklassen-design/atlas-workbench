@@ -53,13 +53,14 @@ function httpJson(port: number, path: string, body?: unknown): Promise<{ status:
   });
 }
 
-function fakeFetch(): typeof fetch {
-  return (async (input: string | URL | Request) => {
+function fakeFetch(seenBodies: string[] = []): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/health")) return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
     if (url.endsWith("/v1/models")) return new Response(JSON.stringify({ data: [{ id: "fake/upstream" }] }), { status: 200 });
     if (url.endsWith("/slots")) return new Response("[]", { status: 200 });
     if (url.endsWith("/v1/chat/completions")) {
+      seenBodies.push(String(init?.body ?? ""));
       return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "proxied" } }] }), { status: 200, headers: { "content-type": "application/json" } });
     }
     return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
@@ -114,10 +115,11 @@ describe("AtlasGateway", () => {
     expect(gateway.status().requestCount).toBeGreaterThan(0);
   });
 
-  it("rejects oversized prompts before forwarding", async () => {
+  it("compresses oversized prompts before forwarding", async () => {
     const port = await getFreePort();
     if (port === null) return;
-    const gateway = new AtlasGateway(fakeFetch());
+    const seenBodies: string[] = [];
+    const gateway = new AtlasGateway(fakeFetch(seenBodies));
     gateways.push(gateway);
     const config = configWithGateway(port);
     await gateway.start({ config });
@@ -128,8 +130,28 @@ describe("AtlasGateway", () => {
       messages: [{ role: "user", content: huge }],
       max_tokens: 1024,
     });
+    expect(result.status).toBe(200);
+    expect(gateway.status().compressedCount).toBe(1);
+    expect(gateway.status().rejectedCount).toBe(0);
+    expect(seenBodies[0]).toContain("Atlas automatic compression");
+  });
+
+  it("rejects oversized prompts when automatic compression is disabled", async () => {
+    const port = await getFreePort();
+    if (port === null) return;
+    const gateway = new AtlasGateway(fakeFetch());
+    gateways.push(gateway);
+    const config = configWithGateway(port);
+    config.agentRuntime.gateway.autoCompressionEnabled = false;
+    await gateway.start({ config });
+    const huge = "token ".repeat(120000);
+
+    const result = await httpJson(port, "/v1/chat/completions", {
+      model: "atlas/3090-ti-ornith-35b-125k-stable",
+      messages: [{ role: "user", content: huge }],
+      max_tokens: 1024,
+    });
     expect(result.status).toBe(413);
-    expect(JSON.stringify(result.json)).toMatch(/context_budget_exceeded|exceeds the active profile budget/);
-    expect(gateway.status().rejectedCount).toBe(1);
+    expect(JSON.stringify(result.json)).toMatch(/context_budget_exceeded|could not compress/i);
   });
 });

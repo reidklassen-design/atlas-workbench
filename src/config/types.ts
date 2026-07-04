@@ -93,6 +93,7 @@ export interface AgentGatewayConfig {
   port: number;
   apiKey: string;
   modelAlias: string;
+  autoCompressionEnabled: boolean;
 }
 
 export interface AgentRuntimeProfile {
@@ -213,6 +214,7 @@ export interface GatewayStatus {
   startedAt?: number;
   requestCount: number;
   rejectedCount: number;
+  compressedCount?: number;
   lastError?: string;
   lastBudget?: {
     ok: boolean;

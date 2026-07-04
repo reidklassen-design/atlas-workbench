@@ -100,7 +100,7 @@ export function AgentRuntimeTab(): JSX.Element {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-4">
+        <div className="mt-4 grid gap-3 md:grid-cols-5">
           <div className="rounded-lg border border-slate-700 bg-black/20 p-3">
             <div className="text-xs text-slate-400">Gateway</div>
             <div className={gateway.running ? "mt-1 text-lg font-semibold text-emerald-300" : "mt-1 text-lg font-semibold text-slate-300"} data-testid="gateway-state">
@@ -118,6 +118,13 @@ export function AgentRuntimeTab(): JSX.Element {
           <div className="rounded-lg border border-slate-700 bg-black/20 p-3">
             <div className="text-xs text-slate-400">Blocked Requests</div>
             <div className="mt-1 text-lg font-semibold text-white" data-testid="gateway-rejected-count">{gateway.rejectedCount}</div>
+          </div>
+          <div className="rounded-lg border border-slate-700 bg-black/20 p-3">
+            <div className="text-xs text-slate-400">Auto Compression</div>
+            <div className={config.agentRuntime.gateway.autoCompressionEnabled ? "mt-1 text-lg font-semibold text-emerald-300" : "mt-1 text-lg font-semibold text-slate-300"} data-testid="gateway-compression-state">
+              {config.agentRuntime.gateway.autoCompressionEnabled ? "On" : "Off"}
+            </div>
+            <div className="mt-1 text-xs text-slate-500" data-testid="gateway-compressed-count">{gateway.compressedCount ?? 0} compressed</div>
           </div>
         </div>
 

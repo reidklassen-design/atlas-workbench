@@ -202,6 +202,7 @@ export function defaultAgentRuntimeConfig(): AgentRuntimeConfig {
       port: 18080,
       apiKey: "atlas-local",
       modelAlias: "atlas/3090-ti-ornith-35b-125k-stable",
+      autoCompressionEnabled: true,
     },
     profiles: defaultAgentRuntimeProfiles(),
   };

@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { probeLlamaServerHealth } from "@/runtime/healthWatchdog";
 import { evaluateTokenBudget, type TokenBudgetResult } from "@/runtime/tokenBudget";
 import { findAgentProfile } from "@/runtime/profiles";
+import { compressOpenAiRequest } from "@/runtime/compression";
 import type { AppConfig, GatewayStatus, RuntimeHealthProbeResult } from "@/config/types";
 
 export interface AtlasGatewayOptions {
@@ -115,6 +116,7 @@ export class AtlasGateway {
   private startedAt?: number;
   private requestCount = 0;
   private rejectedCount = 0;
+  private compressedCount = 0;
   private lastError?: string;
   private lastBudget?: TokenBudgetResult;
 
@@ -133,6 +135,7 @@ export class AtlasGateway {
     this.startedAt = Date.now();
     this.requestCount = 0;
     this.rejectedCount = 0;
+    this.compressedCount = 0;
     this.lastError = undefined;
     this.lastBudget = undefined;
     const gateway = options.config.agentRuntime.gateway;
@@ -182,6 +185,7 @@ export class AtlasGateway {
       startedAt: this.startedAt,
       requestCount: this.requestCount,
       rejectedCount: this.rejectedCount,
+      compressedCount: this.compressedCount,
       lastError: this.lastError,
       lastBudget: this.lastBudget,
     };
@@ -215,10 +219,20 @@ export class AtlasGateway {
       const budget = evaluateTokenBudget(budgetInputFromOpenAiRequest(parsed), profile.requestPolicy);
       this.lastBudget = budget;
       if (!budget.ok) {
+        if (budget.action === "compress" || this.config.agentRuntime.gateway.autoCompressionEnabled) {
+          const compressed = compressOpenAiRequest(parsed, budget.usablePromptTokens);
+          const compressedBudget = evaluateTokenBudget(budgetInputFromOpenAiRequest(compressed.body), profile.requestPolicy);
+          this.lastBudget = compressedBudget;
+          if (compressed.compressed && compressedBudget.ok) {
+            this.compressedCount += 1;
+            await proxyFetch(this.fetchImpl, `${urlBase(this.config.server.host, this.config.server.port)}${path}`, req, res, JSON.stringify(compressed.body));
+            return;
+          }
+        }
         this.rejectedCount += 1;
         sendJson(res, 413, {
           error: {
-            message: `Atlas blocked this request before llama.cpp because it exceeds the active profile budget: ${budget.reasons.join(" ")}`,
+            message: `Atlas could not compress this request enough to fit the active profile budget: ${budget.reasons.join(" ")}`,
             type: "atlas_context_budget_exceeded",
             budget,
           },

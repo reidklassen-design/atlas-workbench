@@ -80,6 +80,7 @@ export function mergeConfigs(saved: Partial<AppConfig>, base: AppConfig = defaul
               port: typeof saved.agentRuntime.gateway.port === "number" ? saved.agentRuntime.gateway.port : base.agentRuntime.gateway.port,
               apiKey: typeof saved.agentRuntime.gateway.apiKey === "string" ? saved.agentRuntime.gateway.apiKey : base.agentRuntime.gateway.apiKey,
               modelAlias: typeof saved.agentRuntime.gateway.modelAlias === "string" ? saved.agentRuntime.gateway.modelAlias : base.agentRuntime.gateway.modelAlias,
+              autoCompressionEnabled: typeof saved.agentRuntime.gateway.autoCompressionEnabled === "boolean" ? saved.agentRuntime.gateway.autoCompressionEnabled : base.agentRuntime.gateway.autoCompressionEnabled,
             }
           : base.agentRuntime.gateway,
       profiles: Array.isArray(saved.agentRuntime.profiles) && saved.agentRuntime.profiles.length > 0 ? saved.agentRuntime.profiles : base.agentRuntime.profiles,
