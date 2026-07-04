@@ -15,14 +15,14 @@ type TabId = "dashboard" | "server" | "models" | "agent-runtime" | "settings" | 
 const atlasCoreLogo = new URL("./assets/atlas-core.png", import.meta.url).href;
 
 const TABS: { id: TabId; label: string; glyph: string }[] = [
-  { id: "dashboard", label: "Dashboard", glyph: "◆" },
-  { id: "server", label: "Server", glyph: "▶" },
-  { id: "models", label: "Models", glyph: "◈" },
-  { id: "agent-runtime", label: "Runtime", glyph: "⌁" },
+  { id: "dashboard", label: "Dashboard", glyph: "⌂" },
+  { id: "server", label: "Server", glyph: "▱" },
+  { id: "models", label: "Models", glyph: "⬡" },
+  { id: "agent-runtime", label: "Runtime", glyph: "⌘" },
   { id: "settings", label: "Settings", glyph: "⚙" },
   { id: "fine-tuning", label: "Fine-tune", glyph: "✦" },
   { id: "system-monitor", label: "Monitor", glyph: "▣" },
-  { id: "logs", label: "Logs", glyph: "≡" },
+  { id: "logs", label: "Logs", glyph: "☷" },
 ];
 
 const GRAPH_LINES = [
@@ -171,17 +171,21 @@ function NeoHeader({ server, gateway }: { server: ProcessStatus; gateway: Gatewa
           <span className={clsx("h-2 w-2 rounded-full", gateway.running || server.state === "running" ? "bg-[#39FF14]" : "bg-[#31513a]")} />
           {runtimeLabel}
         </span>
-        <span className="neo-pill hidden sm:inline-flex">V2</span>
+        <div className="neo-window-controls" aria-hidden="true">
+          <span>−</span>
+          <span>□</span>
+          <span>×</span>
+        </div>
       </div>
     </header>
   );
 }
 
-function NeoSidebar({ active, onSelect }: { active: TabId; onSelect: (tab: TabId) => void }): JSX.Element {
+function NeoSidebar({ active, onSelect, server }: { active: TabId; onSelect: (tab: TabId) => void; server: ProcessStatus }): JSX.Element {
   return (
     <aside className="neo-sidebar" aria-label="Primary navigation">
       <div className="neo-sidebar-rail" aria-hidden="true" />
-      <nav className="space-y-2">
+      <nav className="space-y-3">
         {TABS.map((tab) => (
           <button
             key={tab.id}
@@ -195,6 +199,17 @@ function NeoSidebar({ active, onSelect }: { active: TabId; onSelect: (tab: TabId
           </button>
         ))}
       </nav>
+      <div className="neo-sidebar-status">
+        <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-[#8FA99A]">
+          <span className={clsx("h-2 w-2 rounded-full", statusTone(server.state))} />
+          System Status
+        </div>
+        <div className="mt-4 text-2xl font-semibold uppercase text-[#39FF14]">{server.state === "running" ? "Online" : server.state}</div>
+        <p className="mt-2 text-sm text-[#8FA99A]">{server.state === "running" ? "All systems operational." : "Local runtime standing by."}</p>
+        <div className="mt-4 flex gap-1" aria-hidden="true">
+          {[0, 1, 2, 3, 4].map((item) => <span key={item} className="h-1.5 w-5 skew-x-[-32deg] rounded-sm bg-[#7CFF2B]" />)}
+        </div>
+      </div>
     </aside>
   );
 }
@@ -300,38 +315,69 @@ function DashboardPage(): JSX.Element {
   const vramValue = memoryUsed !== undefined ? (memoryUsed / 1024 / 1024 / 1024).toFixed(1) : "--";
   const vramUnit = memoryUsed !== undefined ? "GB" : "";
   const vramSubtext = memoryTotal ? `${vramPct.toFixed(0)}% of ${formatBytes(memoryTotal)}` : metrics?.gpu.detected ? "VRAM telemetry pending" : "GPU not detected";
+  const now = useMemo(() => new Date(), []);
 
   return (
     <div className="space-y-5" data-testid="dashboard">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="neo-section-kicker">Command Center</div>
-          <h1 className="text-2xl font-semibold text-[#E8FFF0]">Local AI cockpit</h1>
-          <p className="mt-1 text-sm text-[#8FA99A]">Optimized for always-on llama.cpp agent work.</p>
-        </div>
-        <div className="flex items-center gap-2 rounded-lg border border-[#1B3B25] bg-[#07130D] px-3 py-2 text-sm text-[#8FA99A]">
-          <span className={clsx("h-2.5 w-2.5 rounded-full", statusTone(server.state))} />
-          <span className="capitalize">{gateway.running ? "gateway running" : server.state}</span>
-        </div>
-      </div>
-
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="space-y-5">
-          <div className="grid gap-4 md:grid-cols-3">
-            <NeoGauge label="VRAM USAGE" value={vramValue} unit={vramUnit} subtext={vramSubtext} progress={vramPct} />
-            <NeoGauge
-              label="TOKENS / SEC"
-              value={tokensPerSecond === null ? "--" : tokensPerSecond.toFixed(tokensPerSecond % 1 === 0 ? 0 : 1)}
-              unit="tok/s"
-              subtext={tokensPerSecond === null ? "Waiting for generation" : "latest llama.cpp timing"}
-              progress={tokensPerSecond === null ? 0 : Math.min(100, (tokensPerSecond / 120) * 100)}
-            />
-            <NeoGauge label="GPU TEMP" value="--" unit="°C" subtext={metrics?.gpu.detected ? "sensor pending" : "GPU not detected"} progress={0} />
-          </div>
+          <NeoCard className="neo-dashboard-card">
+            <div className="neo-dashboard-heading">
+              <div>
+                <h1 className="text-2xl font-semibold text-[#E8FFF0]">Dashboard</h1>
+                <p className="mt-1 text-sm text-[#8FA99A]">Overview of your local AI system performance.</p>
+              </div>
+              <div className="neo-clock-card">
+                <span className="text-lg text-[#39FF14]">◷</span>
+                <div>
+                  <div className="font-mono text-sm font-semibold text-[#7CFF2B]">{now.toLocaleTimeString()}</div>
+                  <div className="text-xs text-[#8FA99A]">{now.toLocaleDateString()}</div>
+                </div>
+              </div>
+            </div>
+            <div className="neo-dashboard-divider" />
+            <div className="grid gap-4 md:grid-cols-3">
+              <NeoGauge label="VRAM USAGE" value={vramValue} unit={vramUnit} subtext={vramSubtext} progress={vramPct} />
+              <NeoGauge
+                label="TOKENS / SECOND"
+                value={tokensPerSecond === null ? "--" : tokensPerSecond.toFixed(tokensPerSecond % 1 === 0 ? 0 : 1)}
+                unit="tok/s"
+                subtext={tokensPerSecond === null ? "Waiting for generation" : "latest llama.cpp timing"}
+                progress={tokensPerSecond === null ? 0 : Math.min(100, (tokensPerSecond / 120) * 100)}
+              />
+              <NeoGauge label="GPU TEMP" value="--" unit="°C" subtext={metrics?.gpu.detected ? "sensor pending" : "GPU not detected"} progress={0} />
+            </div>
+          </NeoCard>
 
           <NeoPerformanceGraph />
 
-          <div className="grid gap-4 md:grid-cols-3">
+          <NeoCard>
+            <div className="neo-section-kicker">System Load</div>
+            <div className="mt-4 grid gap-4 md:grid-cols-4">
+              <div className="neo-load-tile">
+                <span>CPU Usage</span>
+                <strong>{metrics ? `${metrics.cpu.overall.toFixed(0)}%` : "--"}</strong>
+                <div><i style={{ width: `${metrics?.cpu.overall ?? 0}%` }} /></div>
+              </div>
+              <div className="neo-load-tile">
+                <span>RAM Usage</span>
+                <strong>{metrics ? `${formatBytes(metrics.ram.used)} / ${formatBytes(metrics.ram.total)}` : "--"}</strong>
+                <div><i style={{ width: `${metrics?.ram.percent ?? 0}%` }} /></div>
+              </div>
+              <div className="neo-load-tile">
+                <span>Gateway</span>
+                <strong>{gateway.running ? "Online" : "Offline"}</strong>
+                <div><i style={{ width: gateway.running ? "100%" : "12%" }} /></div>
+              </div>
+              <div className="neo-load-tile">
+                <span>Requests</span>
+                <strong>{gateway.requestCount.toLocaleString()}</strong>
+                <p>{gateway.rejectedCount.toLocaleString()} rejected</p>
+              </div>
+            </div>
+          </NeoCard>
+
+          <div className="grid gap-4 md:grid-cols-3 xl:hidden">
             <NeoCard>
               <div className="neo-section-kicker">Gateway</div>
               <div className="mt-3 text-2xl font-semibold text-[#E8FFF0]">{gateway.running ? "Online" : "Offline"}</div>
@@ -385,7 +431,7 @@ export function Shell(): JSX.Element {
     <div className="neo-shell">
       <NeoHeader server={server} gateway={gateway} />
       <div className="neo-body">
-        <NeoSidebar active={active} onSelect={setActive} />
+        <NeoSidebar active={active} onSelect={setActive} server={server} />
         <main className="neo-main">
           {loaded ? (
             <div className="mx-auto max-w-[1500px]">
