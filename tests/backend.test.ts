@@ -15,7 +15,7 @@ import {
   FAKE_FINETUNE,
   type BackendHarness,
 } from "./helpers/backendHarness";
-import type { AppConfig } from "@/config/types";
+import type { AppConfig, SystemMetrics } from "@/config/types";
 
 async function getFreePort(): Promise<number | null> {
   return new Promise((resolve, reject) => {
@@ -53,6 +53,25 @@ async function httpGet(url: string, timeoutMs = 4000): Promise<{ status: number;
       reject(err);
     });
   });
+}
+
+async function startMetricsServer(bodies: string[]): Promise<{ port: number; close: () => Promise<void> } | null> {
+  const port = await getFreePort();
+  if (port === null) return null;
+  let index = 0;
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end(bodies[Math.min(index, bodies.length - 1)] ?? "");
+    index += 1;
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => resolve());
+  });
+  return {
+    port,
+    close: () => new Promise((resolve) => server.close(() => resolve())),
+  };
 }
 
 async function waitFor<T>(fn: () => T | Promise<T>, predicate: (v: T) => boolean, timeoutMs = 8000): Promise<T> {
@@ -118,6 +137,58 @@ describe("backend config & binary commands", () => {
     const reloaded = (await h.backend.handle("config.load")) as AppConfig;
     expect(reloaded.agentRuntime.activeProfileId).toBe("3090-ti-qwen-3-6-27b-96k-coder");
     expect(reloaded.serverFlags["ctx-size"]).toBe(98304);
+  });
+
+  it("derives live tokens/sec from llama.cpp counters instead of the historical average gauge", async () => {
+    const metricsServer = await startMetricsServer([
+      [
+        "llamacpp:tokens_predicted_total 100",
+        "llamacpp:tokens_predicted_seconds_total 10",
+        "llamacpp:prompt_tokens_total 50",
+        "llamacpp:prompt_seconds_total 5",
+        "llamacpp:predicted_tokens_seconds 114.7",
+        "llamacpp:prompt_tokens_seconds 1200",
+        "llamacpp:requests_processing 0",
+        "llamacpp:requests_deferred 0",
+      ].join("\n"),
+      [
+        "llamacpp:tokens_predicted_total 100",
+        "llamacpp:tokens_predicted_seconds_total 10",
+        "llamacpp:prompt_tokens_total 50",
+        "llamacpp:prompt_seconds_total 5",
+        "llamacpp:predicted_tokens_seconds 114.7",
+        "llamacpp:prompt_tokens_seconds 1200",
+        "llamacpp:requests_processing 0",
+        "llamacpp:requests_deferred 0",
+      ].join("\n"),
+      [
+        "llamacpp:tokens_predicted_total 140",
+        "llamacpp:tokens_predicted_seconds_total 12",
+        "llamacpp:prompt_tokens_total 50",
+        "llamacpp:prompt_seconds_total 5",
+        "llamacpp:predicted_tokens_seconds 114.7",
+        "llamacpp:prompt_tokens_seconds 1200",
+        "llamacpp:requests_processing 1",
+        "llamacpp:requests_deferred 0",
+      ].join("\n"),
+    ]);
+    if (metricsServer === null) return;
+    try {
+      const h = await withFakeBinary({ server: { host: "127.0.0.1", port: metricsServer.port } });
+      harnesses.push(h);
+
+      const first = (await h.backend.handle("monitor.collect", { pids: [] })) as SystemMetrics;
+      const idle = (await h.backend.handle("monitor.collect", { pids: [] })) as SystemMetrics;
+      const active = (await h.backend.handle("monitor.collect", { pids: [] })) as SystemMetrics;
+
+      expect(first.runtime?.averageGenerationTokensPerSecond).toBe(114.7);
+      expect(first.runtime?.generationTokensPerSecond).toBeUndefined();
+      expect(idle.runtime?.generationTokensPerSecond).toBe(0);
+      expect(active.runtime?.generationTokensPerSecond).toBe(20);
+      expect(active.runtime?.averageGenerationTokensPerSecond).toBe(114.7);
+    } finally {
+      await metricsServer.close();
+    }
   });
 
   it("rejects a nonexistent binary path with a plain-language error", async () => {

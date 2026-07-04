@@ -27,6 +27,7 @@ struct AppState {
     children: Arc<Mutex<HashMap<String, Child>>>,
     log_tails: Arc<Mutex<HashMap<String, Vec<String>>>>,
     proc_samples: Mutex<HashMap<usize, ProcSample>>,
+    runtime_sample: Mutex<Option<RuntimeCounterSample>>,
     gateway: Arc<Mutex<Option<GatewayRuntime>>>,
 }
 
@@ -41,6 +42,14 @@ struct GatewayRuntime {
 struct ProcSample {
     ticks: u64,
     ts: u128,
+}
+
+#[derive(Clone, Copy)]
+struct RuntimeCounterSample {
+    generation_tokens_total: Option<f64>,
+    generation_seconds_total: Option<f64>,
+    prompt_tokens_total: Option<f64>,
+    prompt_seconds_total: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -2299,27 +2308,66 @@ fn prometheus_metric(text: &str, metric: &str) -> Option<f64> {
     None
 }
 
-fn collect_runtime_metrics(config: &Value) -> Option<Value> {
+fn delta_rate(total: Option<f64>, seconds: Option<f64>, previous_total: Option<f64>, previous_seconds: Option<f64>) -> Option<f64> {
+    let total = total?;
+    let seconds = seconds?;
+    let previous_total = previous_total?;
+    let previous_seconds = previous_seconds?;
+    let token_delta = total - previous_total;
+    let seconds_delta = seconds - previous_seconds;
+    if token_delta < 0.0 || seconds_delta < 0.0 {
+        return None;
+    }
+    if token_delta == 0.0 {
+        return Some(0.0);
+    }
+    if seconds_delta <= 0.0 {
+        return None;
+    }
+    Some(token_delta / seconds_delta)
+}
+
+fn collect_runtime_metrics(config: &Value, previous: Option<RuntimeCounterSample>) -> Option<(Value, RuntimeCounterSample)> {
     let host = string_at(config, &["server", "host"]);
     let port = number_at(config, &["server", "port"], 8099);
     let (status, body) = http_get_text(&host, port, "/metrics", Duration::from_millis(750)).ok()?;
     if status != 200 {
         return None;
     }
-    let generation = prometheus_metric(&body, "llamacpp:predicted_tokens_seconds");
-    let prompt = prometheus_metric(&body, "llamacpp:prompt_tokens_seconds");
+    let sample = RuntimeCounterSample {
+        generation_tokens_total: prometheus_metric(&body, "llamacpp:tokens_predicted_total"),
+        generation_seconds_total: prometheus_metric(&body, "llamacpp:tokens_predicted_seconds_total"),
+        prompt_tokens_total: prometheus_metric(&body, "llamacpp:prompt_tokens_total"),
+        prompt_seconds_total: prometheus_metric(&body, "llamacpp:prompt_seconds_total"),
+    };
+    let average_generation = prometheus_metric(&body, "llamacpp:predicted_tokens_seconds");
+    let average_prompt = prometheus_metric(&body, "llamacpp:prompt_tokens_seconds");
+    let generation = delta_rate(
+        sample.generation_tokens_total,
+        sample.generation_seconds_total,
+        previous.and_then(|sample| sample.generation_tokens_total),
+        previous.and_then(|sample| sample.generation_seconds_total),
+    );
+    let prompt = delta_rate(
+        sample.prompt_tokens_total,
+        sample.prompt_seconds_total,
+        previous.and_then(|sample| sample.prompt_tokens_total),
+        previous.and_then(|sample| sample.prompt_seconds_total),
+    );
     let processing = prometheus_metric(&body, "llamacpp:requests_processing");
     let deferred = prometheus_metric(&body, "llamacpp:requests_deferred");
-    if generation.is_none() && prompt.is_none() && processing.is_none() && deferred.is_none() {
+    if generation.is_none() && prompt.is_none() && average_generation.is_none() && average_prompt.is_none() && processing.is_none() && deferred.is_none() {
         return None;
     }
-    Some(json!({
+    Some((json!({
         "source": "llama.cpp",
         "generationTokensPerSecond": generation,
         "promptTokensPerSecond": prompt,
+        "averageGenerationTokensPerSecond": average_generation,
+        "averagePromptTokensPerSecond": average_prompt,
         "requestsProcessing": processing,
         "requestsDeferred": deferred
-    }))
+    }), sample))
 }
 
 fn read_process_metrics(state: &State<AppState>, pid: usize, name: &str) -> Value {
@@ -2387,6 +2435,16 @@ fn training_check_output(path: String) -> Value {
 #[tauri::command]
 fn monitor_collect(state: State<AppState>, pids: Option<Vec<Value>>) -> Value {
     let config = load_config_value().ok();
+    let previous_runtime_sample = state.runtime_sample.lock().ok().and_then(|guard| *guard);
+    let runtime = config
+        .as_ref()
+        .and_then(|config| collect_runtime_metrics(config, previous_runtime_sample));
+    let runtime_metrics = runtime.as_ref().map(|(metrics, _)| metrics.clone());
+    if let Some((_, sample)) = runtime {
+        if let Ok(mut guard) = state.runtime_sample.lock() {
+            *guard = Some(sample);
+        }
+    }
     let mut system = System::new_all();
     system.refresh_all();
     let cpus = system.cpus();
@@ -2415,7 +2473,7 @@ fn monitor_collect(state: State<AppState>, pids: Option<Vec<Value>>) -> Value {
         "cpu": { "overall": overall, "perCore": per_core },
         "ram": { "used": used, "total": total, "percent": if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 } },
         "gpu": collect_gpu(),
-        "runtime": config.as_ref().and_then(collect_runtime_metrics),
+        "runtime": runtime_metrics,
         "processes": processes,
         "ts": now()
     })

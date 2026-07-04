@@ -195,6 +195,8 @@ export interface SystemMetrics {
 export interface RuntimeMetrics {
   generationTokensPerSecond?: number;
   promptTokensPerSecond?: number;
+  averageGenerationTokensPerSecond?: number;
+  averagePromptTokensPerSecond?: number;
   requestsProcessing?: number;
   requestsDeferred?: number;
   source: "llama.cpp";

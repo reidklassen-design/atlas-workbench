@@ -15,6 +15,10 @@ function latestTokensPerSecond(logs: { text: string }[]): string | null {
   return null;
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function useElapsedSeconds(active: boolean, startedAt?: number): number {
   const [now, setNow] = useState(Date.now());
 
@@ -115,7 +119,8 @@ export function ServerTab(): JSX.Element {
   const gpuLayers = Number(config.serverFlags["n-gpu-layers"] ?? 0);
   const gpuMode = gpuOffloadMode(config);
   const command = buildRedactedServerCommandString(config);
-  const tokensPerSecond = metrics?.runtime?.generationTokensPerSecond !== undefined ? metrics.runtime.generationTokensPerSecond.toFixed(2) : latestTokensPerSecond(logs);
+  const liveTokensPerSecond = finiteNumber(metrics?.runtime?.generationTokensPerSecond);
+  const tokensPerSecond = liveTokensPerSecond !== undefined ? liveTokensPerSecond.toFixed(2) : latestTokensPerSecond(logs);
 
   function setGpuLayers(value: number): void {
     void controller.updateConfig((cfg) => ({

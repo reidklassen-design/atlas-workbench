@@ -13,7 +13,7 @@ import { AgentRuntimeTab } from "@/ui/tabs/AgentRuntimeTab";
 import type { AppConfig, GatewayStatus, ProcessLogLine, ProcessStatus, SystemMetrics } from "@/config/types";
 
 type TabId = "dashboard" | "server" | "models" | "agent-runtime" | "settings" | "fine-tuning" | "system-monitor" | "logs";
-const atlasCoreLogo = new URL("./assets/atlas-core.png", import.meta.url).href;
+const atlasCoreBadge = new URL("./assets/atlas-core-badge.png", import.meta.url).href;
 
 const TABS: { id: TabId; label: string; glyph: string }[] = [
   { id: "dashboard", label: "Dashboard", glyph: "⌂" },
@@ -305,7 +305,7 @@ function NeoHeader({ server, gateway }: { server: ProcessStatus; gateway: Gatewa
         <span className="neo-pill">LOCAL MODE</span>
       </div>
       <div className="neo-brand" aria-label="Atlas Core">
-        <img className="neo-brand-mark" src={atlasCoreLogo} alt="" aria-hidden="true" />
+        <img className="neo-brand-mark" src={atlasCoreBadge} alt="" aria-hidden="true" />
         <div className="neo-brand-subtitle">LOCAL LLAMA.CPP OPERATIONS</div>
       </div>
       <div className="neo-header-right">

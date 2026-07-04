@@ -66,26 +66,74 @@ function prometheusMetric(text: string, metric: string): number | undefined {
   return match?.[1] ? Number(match[1]) : undefined;
 }
 
-async function collectRuntimeMetrics(config: AppConfig): Promise<RuntimeMetrics | undefined> {
+interface RuntimeCounterSample {
+  generationTokensTotal?: number;
+  generationSecondsTotal?: number;
+  promptTokensTotal?: number;
+  promptSecondsTotal?: number;
+}
+
+interface RuntimeMetricsResult {
+  metrics: RuntimeMetrics;
+  sample: RuntimeCounterSample;
+}
+
+function deltaRate(total: number | undefined, seconds: number | undefined, previousTotal: number | undefined, previousSeconds: number | undefined): number | undefined {
+  if (total === undefined || seconds === undefined || previousTotal === undefined || previousSeconds === undefined) return undefined;
+  const tokenDelta = total - previousTotal;
+  const secondsDelta = seconds - previousSeconds;
+  if (tokenDelta < 0 || secondsDelta < 0) return undefined;
+  if (tokenDelta === 0) return 0;
+  if (secondsDelta <= 0) return undefined;
+  return tokenDelta / secondsDelta;
+}
+
+async function collectRuntimeMetrics(config: AppConfig, previous?: RuntimeCounterSample): Promise<RuntimeMetricsResult | undefined> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 750);
   try {
     const res = await fetch(`http://${clientHost(config.server.host)}:${config.server.port}/metrics`, { signal: controller.signal });
     if (!res.ok) return undefined;
     const text = await res.text();
-    const generationTokensPerSecond = prometheusMetric(text, "llamacpp:predicted_tokens_seconds");
-    const promptTokensPerSecond = prometheusMetric(text, "llamacpp:prompt_tokens_seconds");
+    const sample: RuntimeCounterSample = {
+      generationTokensTotal: prometheusMetric(text, "llamacpp:tokens_predicted_total"),
+      generationSecondsTotal: prometheusMetric(text, "llamacpp:tokens_predicted_seconds_total"),
+      promptTokensTotal: prometheusMetric(text, "llamacpp:prompt_tokens_total"),
+      promptSecondsTotal: prometheusMetric(text, "llamacpp:prompt_seconds_total"),
+    };
+    const averageGenerationTokensPerSecond = prometheusMetric(text, "llamacpp:predicted_tokens_seconds");
+    const averagePromptTokensPerSecond = prometheusMetric(text, "llamacpp:prompt_tokens_seconds");
+    const generationTokensPerSecond = deltaRate(
+      sample.generationTokensTotal,
+      sample.generationSecondsTotal,
+      previous?.generationTokensTotal,
+      previous?.generationSecondsTotal,
+    );
+    const promptTokensPerSecond = deltaRate(sample.promptTokensTotal, sample.promptSecondsTotal, previous?.promptTokensTotal, previous?.promptSecondsTotal);
     const requestsProcessing = prometheusMetric(text, "llamacpp:requests_processing");
     const requestsDeferred = prometheusMetric(text, "llamacpp:requests_deferred");
     if (
       generationTokensPerSecond === undefined &&
       promptTokensPerSecond === undefined &&
+      averageGenerationTokensPerSecond === undefined &&
+      averagePromptTokensPerSecond === undefined &&
       requestsProcessing === undefined &&
       requestsDeferred === undefined
     ) {
       return undefined;
     }
-    return { source: "llama.cpp", generationTokensPerSecond, promptTokensPerSecond, requestsProcessing, requestsDeferred };
+    return {
+      metrics: {
+        source: "llama.cpp",
+        generationTokensPerSecond,
+        promptTokensPerSecond,
+        averageGenerationTokensPerSecond,
+        averagePromptTokensPerSecond,
+        requestsProcessing,
+        requestsDeferred,
+      },
+      sample,
+    };
   } catch {
     return undefined;
   } finally {
@@ -100,6 +148,7 @@ export class Backend extends EventEmitter {
   readonly errorLog: ErrorLog;
   readonly gateway: AtlasGateway;
   private stopping = new Map<string, boolean>();
+  private runtimeCounterSample?: RuntimeCounterSample;
 
   constructor(opts: BackendOptions = {}) {
     super();
@@ -251,8 +300,9 @@ export class Backend extends EventEmitter {
       case "monitor.collect": {
         const pids = (args.pids as { pid: number; name: string }[]) ?? [];
         const config = await this.configStore.load();
-        const [metrics, runtime] = await Promise.all([this.monitor.collect(pids), collectRuntimeMetrics(config)]);
-        return { ...metrics, runtime } satisfies SystemMetrics;
+        const [metrics, runtime] = await Promise.all([this.monitor.collect(pids), collectRuntimeMetrics(config, this.runtimeCounterSample)]);
+        if (runtime?.sample) this.runtimeCounterSample = runtime.sample;
+        return { ...metrics, runtime: runtime?.metrics } satisfies SystemMetrics;
       }
       case "error.log": {
         await this.errorLog.append(args.error as AppError);
