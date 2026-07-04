@@ -1961,6 +1961,7 @@ fn gateway_status_value(config: &Value, running: bool, started_at: Option<u128>,
     let port = number_at(config, &["agentRuntime", "gateway", "port"], 18080);
     json!({
         "running": running,
+        "external": false,
         "host": if host.is_empty() { "127.0.0.1".to_string() } else { host },
         "port": port,
         "upstream": format!("http://{}:{}", client_host_for(&string_at(config, &["server", "host"])), number_at(config, &["server", "port"], 8080)),
@@ -1971,6 +1972,29 @@ fn gateway_status_value(config: &Value, running: bool, started_at: Option<u128>,
         "rejectedCount": rejected_count,
         "compressedCount": 0
     })
+}
+
+fn external_gateway_status(config: &Value) -> Value {
+    let base = gateway_status_value(config, false, None, 0, 0);
+    let host = string_at(config, &["agentRuntime", "gateway", "host"]);
+    let port = number_at(config, &["agentRuntime", "gateway", "port"], 18080);
+    let Ok((status, body)) = http_get_text(&host, port, "/health", Duration::from_millis(1000)) else {
+        return base;
+    };
+    if status != 200 {
+        return base;
+    }
+    let Ok(parsed) = serde_json::from_str::<Value>(&body) else {
+        return base;
+    };
+    let Some(mut gateway) = parsed.get("gateway").cloned() else {
+        return base;
+    };
+    if let Some(obj) = gateway.as_object_mut() {
+        obj.insert("running".to_string(), json!(true));
+        obj.insert("external".to_string(), json!(true));
+    }
+    gateway
 }
 
 #[tauri::command]
@@ -1984,6 +2008,10 @@ fn gateway_start(state: State<AppState>) -> Result<Value, AppError> {
         if gateway.is_some() {
             return Ok(gateway_status_value(&config, true, gateway.as_ref().map(|g| g.started_at), 0, 0));
         }
+    }
+    let external = external_gateway_status(&config);
+    if external.get("running").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(external);
     }
     let listener = TcpListener::bind(format!("{}:{}", host, port)).map_err(|e| app_error("agent-gateway", "Could not start Atlas Gateway", e.to_string(), "Choose a different gateway port or stop the process already using it."))?;
     listener.set_nonblocking(true).map_err(|e| app_error("agent-gateway", "Could not configure Atlas Gateway", e.to_string(), "Restart Atlas Workbench and try again."))?;
@@ -2013,8 +2041,9 @@ fn gateway_stop(state: State<AppState>) -> Result<Value, AppError> {
     let mut gateway = state.gateway.lock().map_err(|_| app_error("agent-gateway", "Gateway state unavailable", "Could not lock gateway state.", "Restart Atlas Workbench and try again."))?;
     if let Some(runtime) = gateway.take() {
         let _ = runtime.shutdown.send(());
+        return Ok(gateway_status_value(&config, false, None, 0, 0));
     }
-    Ok(gateway_status_value(&config, false, None, 0, 0))
+    Ok(external_gateway_status(&config))
 }
 
 #[tauri::command]
@@ -2026,6 +2055,9 @@ fn gateway_status(state: State<AppState>) -> Result<Value, AppError> {
     if let (Some(runtime), Some(obj)) = (gateway.as_ref(), status.as_object_mut()) {
         obj.insert("host".to_string(), json!(runtime.host.clone()));
         obj.insert("port".to_string(), json!(runtime.port));
+    }
+    if !gateway.is_some() {
+        status = external_gateway_status(&config);
     }
     Ok(status)
 }

@@ -232,6 +232,51 @@ describe("backend Atlas Gateway commands", () => {
     const stopped = (await h.backend.handle("gateway.stop")) as { running: boolean };
     expect(stopped.running).toBe(false);
   });
+
+  it("reports an externally managed gateway as running", async () => {
+    const gatewayPort = await getFreePort();
+    if (gatewayPort === null) return;
+    const external = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        status: "ok",
+        gateway: {
+          running: true,
+          host: "0.0.0.0",
+          port: gatewayPort,
+          upstream: "http://127.0.0.1:8099",
+          modelAlias: "atlas/external",
+          activeProfileId: "external-profile",
+          requestCount: 7,
+          rejectedCount: 1,
+          compressedCount: 2,
+        },
+      }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      external.once("error", reject);
+      external.listen(gatewayPort, "127.0.0.1", () => resolve());
+    });
+    const h = await withFakeBinary({
+      agentRuntime: {
+        ...defaultConfig().agentRuntime,
+        gateway: { ...defaultConfig().agentRuntime.gateway, host: "0.0.0.0", port: gatewayPort },
+      },
+    });
+    harnesses.push(h);
+    try {
+      const status = (await h.backend.handle("gateway.status")) as { running: boolean; external?: boolean; requestCount: number };
+      expect(status.running).toBe(true);
+      expect(status.external).toBe(true);
+      expect(status.requestCount).toBe(7);
+
+      const started = (await h.backend.handle("gateway.start")) as { running: boolean; external?: boolean };
+      expect(started.running).toBe(true);
+      expect(started.external).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => external.close(() => resolve()));
+    }
+  });
 });
 
 describe("backend fine-tuning", () => {

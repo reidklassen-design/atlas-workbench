@@ -206,6 +206,7 @@ export interface RuntimeHealthProbeResult {
 
 export interface GatewayStatus {
   running: boolean;
+  external?: boolean;
   host: string;
   port: number;
   upstream: string;

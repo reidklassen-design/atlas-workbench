@@ -19,7 +19,7 @@ import {
   fromProcessStartError,
   isPortInUse,
 } from "@/errors/errorMapper";
-import type { AppConfig, AppError, ProcessLogLine, ProcessStatus } from "@/config/types";
+import type { AppConfig, AppError, GatewayStatus, ProcessLogLine, ProcessStatus } from "@/config/types";
 
 export class CommandError extends Error {
   constructor(
@@ -52,6 +52,12 @@ export interface TrainingCompletePayload {
   outputPath: string;
   exists: boolean;
   exitCode: number | null;
+}
+
+function clientHost(host: string): string {
+  const trimmed = host.trim();
+  if (!trimmed || trimmed === "0.0.0.0" || trimmed === "::" || trimmed === "*") return "127.0.0.1";
+  return trimmed.replace(/^\[|\]$/g, "");
 }
 
 export class Backend extends EventEmitter {
@@ -151,12 +157,20 @@ export class Backend extends EventEmitter {
       }
       case "gateway.start": {
         const config = await this.configStore.load();
+        const external = await this.externalGatewayStatus(config);
+        if (external.running) return external;
         return this.gateway.start({ config });
       }
-      case "gateway.stop":
-        return this.gateway.stop();
-      case "gateway.status":
-        return this.gateway.status();
+      case "gateway.stop": {
+        if (this.gateway.running) return this.gateway.stop();
+        const config = await this.configStore.load();
+        return this.externalGatewayStatus(config);
+      }
+      case "gateway.status": {
+        if (this.gateway.running) return this.gateway.status();
+        const config = await this.configStore.load();
+        return this.externalGatewayStatus(config);
+      }
       case "gateway.health":
         return this.gateway.health();
       case "binary.validate":
@@ -239,6 +253,46 @@ export class Backend extends EventEmitter {
         throw new CommandError("model-management", fromDirectoryError("model-management", trimmed).title, fromDirectoryError("model-management", trimmed).message, fromDirectoryError("model-management", trimmed).fix);
       }
       throw new CommandError("model-management", "Could not open directory", `Could not read “${trimmed}”: ${code ?? "unknown error"}`, "Choose a different folder and try again.");
+    }
+  }
+
+  private async externalGatewayStatus(config: AppConfig): Promise<GatewayStatus> {
+    const gateway = config.agentRuntime.gateway;
+    const base: GatewayStatus = {
+      running: false,
+      external: false,
+      host: gateway.host || "127.0.0.1",
+      port: gateway.port,
+      upstream: `http://${clientHost(config.server.host)}:${config.server.port}`,
+      modelAlias: gateway.modelAlias,
+      activeProfileId: config.agentRuntime.activeProfileId,
+      requestCount: 0,
+      rejectedCount: 0,
+      compressedCount: 0,
+    };
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1000);
+      const res = await fetch(`http://${clientHost(gateway.host)}:${gateway.port}/health`, { signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) return base;
+      const parsed = await res.json() as { gateway?: Partial<GatewayStatus> };
+      return {
+        ...base,
+        ...parsed.gateway,
+        running: true,
+        external: true,
+        host: parsed.gateway?.host ?? base.host,
+        port: parsed.gateway?.port ?? base.port,
+        upstream: parsed.gateway?.upstream ?? base.upstream,
+        modelAlias: parsed.gateway?.modelAlias ?? base.modelAlias,
+        activeProfileId: parsed.gateway?.activeProfileId ?? base.activeProfileId,
+        requestCount: parsed.gateway?.requestCount ?? 0,
+        rejectedCount: parsed.gateway?.rejectedCount ?? 0,
+        compressedCount: parsed.gateway?.compressedCount ?? 0,
+      };
+    } catch {
+      return base;
     }
   }
 

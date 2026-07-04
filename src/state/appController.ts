@@ -30,6 +30,7 @@ export class AppController {
   metrics: SystemMetrics | null = null;
   gateway: GatewayStatus = {
     running: false,
+    external: false,
     host: "127.0.0.1",
     port: 18080,
     upstream: "",
@@ -247,7 +248,7 @@ export class AppController {
     try {
       const status = await this.invoke<GatewayStatus>("gateway.start");
       this.commit({ gateway: status });
-      this.pushServerLog(`Atlas Gateway listening at http://${status.host}:${status.port}/v1 for ${status.modelAlias}.`);
+      this.pushServerLog(`Atlas Gateway ${status.external ? "already reachable" : "listening"} at http://${status.host}:${status.port}/v1 for ${status.modelAlias}.`);
       return true;
     } catch (err) {
       this.pushError(err as AppError, () => this.startGateway());

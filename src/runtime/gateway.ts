@@ -203,6 +203,7 @@ export class AtlasGateway {
     const gateway = config?.agentRuntime.gateway;
     return {
       running: this.running,
+      external: false,
       host: gateway?.host ?? "127.0.0.1",
       port: gateway?.port ?? 18080,
       upstream: config ? urlBase(config.server.host, config.server.port) : "",

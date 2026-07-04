@@ -91,7 +91,7 @@ export function AgentRuntimeTab(): JSX.Element {
             <button type="button" className="btn-primary" disabled={gateway.running || busy === "gateway:start"} onClick={() => void startGateway()} data-testid="gateway-start">
               {busy === "gateway:start" ? "Starting..." : "Start Gateway"}
             </button>
-            <button type="button" className="btn-danger" disabled={!gateway.running || busy === "gateway:stop"} onClick={() => void stopGateway()} data-testid="gateway-stop">
+            <button type="button" className="btn-danger" disabled={!gateway.running || gateway.external || busy === "gateway:stop"} onClick={() => void stopGateway()} data-testid="gateway-stop">
               Stop Gateway
             </button>
             <button type="button" className="btn-ghost" disabled={busy === "health"} onClick={() => void checkHealth()} data-testid="runtime-health-check">
@@ -106,6 +106,7 @@ export function AgentRuntimeTab(): JSX.Element {
             <div className={gateway.running ? "mt-1 text-lg font-semibold text-emerald-300" : "mt-1 text-lg font-semibold text-slate-300"} data-testid="gateway-state">
               {gateway.running ? "Running" : "Stopped"}
             </div>
+            {gateway.external ? <div className="mt-1 text-xs text-slate-500">Managed service</div> : null}
           </div>
           <div className="rounded-lg border border-slate-700 bg-black/20 p-3">
             <div className="text-xs text-slate-400">Active Profile</div>
