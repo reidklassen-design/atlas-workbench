@@ -61,6 +61,8 @@
   }
   .neo-header-left,
   .neo-header-right {
+    position: relative;
+    z-index: 3;
     display: flex;
     align-items: center;
     gap: 0.65rem;
@@ -135,24 +137,28 @@
     box-shadow: 0 0 18px rgba(255, 77, 77, 0.18), inset 0 0 18px rgba(255, 77, 77, 0.08);
   }
   .neo-brand {
+    position: absolute;
+    z-index: 5;
+    top: 0.1rem;
+    left: 50%;
+    width: 18rem;
+    transform: translateX(-50%);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 0;
-    min-width: 0;
-    margin-top: -0.7rem;
     pointer-events: none;
   }
   .neo-brand-mark {
-    height: 8.25rem;
-    width: 9.5rem;
+    height: 9.25rem;
+    width: 18rem;
     border-radius: 0;
-    filter: drop-shadow(0 0 26px rgba(57, 255, 20, 0.58));
+    filter: drop-shadow(0 0 32px rgba(57, 255, 20, 0.7));
     object-fit: contain;
   }
   .neo-brand-subtitle {
-    margin-top: -0.7rem;
+    margin-top: -1.05rem;
     font-size: 0.66rem;
     font-weight: 700;
     letter-spacing: 0.18em;
