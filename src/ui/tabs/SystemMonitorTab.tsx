@@ -7,6 +7,10 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024).toFixed(0)} KB`;
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function Bar({ value, color = "bg-accent" }: { value: number; color?: string }): JSX.Element {
   const pct = Math.max(0, Math.min(100, value));
   return (
@@ -28,6 +32,10 @@ export function SystemMonitorTab(): JSX.Element {
   }
 
   const ramColor = metrics.ram.percent > 90 ? "bg-err" : metrics.ram.percent > 70 ? "bg-warn" : "bg-ok";
+  const gpuUsage = finiteNumber(metrics.gpu.usagePercent);
+  const gpuMemoryTotal = finiteNumber(metrics.gpu.memoryTotal);
+  const gpuMemoryUsed = finiteNumber(metrics.gpu.memoryUsed);
+  const gpuTemperature = finiteNumber(metrics.gpu.temperatureCelsius);
 
   return (
     <div className="space-y-4" data-testid="system-monitor">
@@ -65,15 +73,20 @@ export function SystemMonitorTab(): JSX.Element {
         {metrics.gpu.detected ? (
           <div data-testid="gpu-metrics">
             <p className="text-sm text-slate-200">{metrics.gpu.name ?? "GPU"}</p>
-            {metrics.gpu.usagePercent !== undefined ? (
+            {gpuUsage !== undefined ? (
               <div className="mt-2">
-                <div className="flex justify-between text-xs text-slate-400"><span>Utilization</span><span>{metrics.gpu.usagePercent.toFixed(0)}%</span></div>
-                <Bar value={metrics.gpu.usagePercent} color="bg-accent2" />
+                <div className="flex justify-between text-xs text-slate-400"><span>Utilization</span><span>{gpuUsage.toFixed(0)}%</span></div>
+                <Bar value={gpuUsage} color="bg-accent2" />
               </div>
             ) : null}
-            {metrics.gpu.memoryTotal !== undefined ? (
+            {gpuMemoryTotal !== undefined ? (
               <p className="mt-2 text-xs text-slate-400">
-                {formatBytes(metrics.gpu.memoryUsed ?? 0)} / {formatBytes(metrics.gpu.memoryTotal)} VRAM
+                {formatBytes(gpuMemoryUsed ?? 0)} / {formatBytes(gpuMemoryTotal)} VRAM
+              </p>
+            ) : null}
+            {gpuTemperature !== undefined ? (
+              <p className="mt-2 text-xs text-slate-400" data-testid="gpu-temperature">
+                {gpuTemperature.toFixed(0)} °C GPU temperature
               </p>
             ) : null}
             {metrics.gpu.note ? <p className="mt-2 text-xs text-slate-500">{metrics.gpu.note}</p> : null}

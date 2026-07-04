@@ -172,6 +172,7 @@ export interface GpuMetrics {
   usagePercent?: number;
   memoryUsed?: number;
   memoryTotal?: number;
+  temperatureCelsius?: number;
   note?: string;
 }
 
@@ -186,8 +187,17 @@ export interface SystemMetrics {
   cpu: CpuMetrics;
   ram: RamMetrics;
   gpu: GpuMetrics;
+  runtime?: RuntimeMetrics;
   processes: ProcessResource[];
   ts: number;
+}
+
+export interface RuntimeMetrics {
+  generationTokensPerSecond?: number;
+  promptTokensPerSecond?: number;
+  requestsProcessing?: number;
+  requestsDeferred?: number;
+  source: "llama.cpp";
 }
 
 export type RuntimeHealthState = "healthy" | "degraded" | "unreachable";

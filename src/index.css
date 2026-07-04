@@ -40,13 +40,13 @@
     grid-template-columns: minmax(230px, 1fr) auto minmax(230px, 1fr);
     align-items: start;
     gap: 1rem;
-    min-height: 92px;
+    min-height: 128px;
     border: 1px solid rgba(61, 122, 50, 0.68);
     background:
       linear-gradient(135deg, transparent 0 4%, rgba(7, 19, 13, 0.98) 4% 38%, rgba(3, 8, 6, 0.98) 38% 62%, rgba(7, 19, 13, 0.98) 62% 96%, transparent 96%),
       #030806;
     box-shadow: 0 14px 40px rgba(0, 0, 0, 0.38), inset 0 -1px 0 rgba(124, 255, 43, 0.08);
-    padding: 0.85rem 1rem 1rem;
+    padding: 0.85rem 1rem 1.05rem;
     clip-path: polygon(0 0, 20% 0, 21.5% 26%, 36% 26%, 38.5% 100%, 61.5% 100%, 64% 26%, 78.5% 26%, 80% 0, 100% 0, 100% 88%, 99.2% 100%, 0.8% 100%, 0 88%);
   }
   .neo-header::after {
@@ -110,7 +110,7 @@
     align-items: center;
     gap: 0.6rem;
   }
-  .neo-window-controls span {
+  .neo-window-controls button {
     display: grid;
     height: 2.65rem;
     width: 3rem;
@@ -123,31 +123,36 @@
     clip-path: polygon(18% 0, 82% 0, 100% 50%, 82% 100%, 18% 100%, 0 50%);
     box-shadow: inset 0 0 16px rgba(57, 255, 20, 0.04);
   }
+  .neo-window-controls button:hover {
+    border-color: rgba(124, 255, 43, 0.9);
+    background: rgba(16, 42, 27, 0.9);
+    color: #e8fff0;
+    box-shadow: 0 0 18px rgba(57, 255, 20, 0.18), inset 0 0 18px rgba(57, 255, 20, 0.08);
+  }
+  .neo-window-controls button:last-child:hover {
+    border-color: rgba(255, 77, 77, 0.8);
+    color: #ff4d4d;
+    box-shadow: 0 0 18px rgba(255, 77, 77, 0.18), inset 0 0 18px rgba(255, 77, 77, 0.08);
+  }
   .neo-brand {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0.25rem;
+    gap: 0.2rem;
     min-width: 0;
-    margin-top: -0.2rem;
+    margin-top: -0.55rem;
+    pointer-events: none;
   }
   .neo-brand-mark {
-    height: 4.35rem;
-    width: 4.35rem;
-    border-radius: 1rem;
-    filter: drop-shadow(0 0 20px rgba(57, 255, 20, 0.42));
+    height: 6.55rem;
+    width: 6.55rem;
+    border-radius: 1.1rem;
+    filter: drop-shadow(0 0 22px rgba(57, 255, 20, 0.48));
     object-fit: cover;
   }
-  .neo-brand-title {
-    font-size: clamp(1.08rem, 2vw, 1.5rem);
-    font-weight: 800;
-    letter-spacing: 0.18em;
-    color: #e8fff0;
-    text-shadow: 0 0 22px rgba(57, 255, 20, 0.22);
-  }
   .neo-brand-subtitle {
-    margin-top: 0.08rem;
+    margin-top: -0.1rem;
     font-size: 0.66rem;
     font-weight: 700;
     letter-spacing: 0.18em;

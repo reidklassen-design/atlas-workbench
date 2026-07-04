@@ -1,6 +1,10 @@
 import { promises as fs } from "node:fs";
+import { execFile } from "node:child_process";
 import { homedir } from "node:os";
+import { promisify } from "node:util";
 import type { GpuMetrics } from "@/config/types";
+
+const execFileAsync = promisify(execFile);
 
 export interface GpuProbe {
   detect(): Promise<GpuMetrics>;
@@ -21,15 +25,55 @@ function trimLines(text: string): string[] {
     .filter(Boolean);
 }
 
+async function queryNvidiaSmi(): Promise<GpuMetrics | null> {
+  try {
+    const { stdout } = await execFileAsync("nvidia-smi", [
+      "--query-gpu=name,utilization.gpu,temperature.gpu,memory.used,memory.total",
+      "--format=csv,noheader,nounits",
+    ], { timeout: 1500 });
+    const line = trimLines(stdout)[0];
+    if (!line) return null;
+    const parts = line.split(",").map((part) => part.trim());
+    if (!parts[0]) return null;
+    return {
+      detected: true,
+      name: parts[0],
+      usagePercent: parts[1] ? Number(parts[1]) : undefined,
+      temperatureCelsius: parts[2] ? Number(parts[2]) : undefined,
+      memoryUsed: parts[3] ? Number(parts[3]) * 1024 * 1024 : undefined,
+      memoryTotal: parts[4] ? Number(parts[4]) * 1024 * 1024 : undefined,
+      note: "Detected with nvidia-smi",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readHwmonTemperatureCelsius(devicePath: string, readFile: (p: string) => Promise<string | null>): Promise<number | undefined> {
+  try {
+    const entries = await fs.readdir(`${devicePath}/hwmon`);
+    for (const entry of entries) {
+      const raw = await readFile(`${devicePath}/hwmon/${entry}/temp1_input`);
+      const milliCelsius = raw ? Number(trimLines(raw)[0]) : NaN;
+      if (Number.isFinite(milliCelsius)) return milliCelsius / 1000;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 /**
- * Detect a GPU and read whatever utilization/memory metrics the Linux kernel
- * exposes through sysfs/procfs. No external processes are spawned, honoring
- * the system-monitor spec constraint. When no GPU is found, a clear
- * "GPU not detected" result is returned.
+ * Detect a GPU and read utilization, temperature, and memory counters.
+ * NVIDIA systems use nvidia-smi for the counters the kernel does not expose
+ * consistently; other GPUs fall back to sysfs/procfs where available.
  */
 export function createLinuxGpuProbe(readFile: (p: string) => Promise<string | null> = readFileSafe): GpuProbe {
   return {
     async detect(): Promise<GpuMetrics> {
+      const nvidiaSmi = await queryNvidiaSmi();
+      if (nvidiaSmi) return nvidiaSmi;
+
       // NVIDIA presence via procfs (no nvidia-smi invocation).
       const nvidiaInfo = await readFile("/proc/driver/nvidia/gpus/0000:01:00.0/information");
       if (nvidiaInfo) {
@@ -60,6 +104,7 @@ export function createLinuxGpuProbe(readFile: (p: string) => Promise<string | nu
         const busy = await readFile(`${drmBase}/${card}/device/gpu_busy_percent`);
         const memBusy = await readFile(`${drmBase}/${card}/device/mem_info_vram_used`);
         const memTotal = await readFile(`${drmBase}/${card}/device/mem_info_vram_total`);
+        const temperatureCelsius = await readHwmonTemperatureCelsius(`${drmBase}/${card}/device`, readFile);
         const name = nameFile ? trimLines(nameFile)[0] ?? "GPU" : "GPU";
         return {
           detected: true,
@@ -67,6 +112,7 @@ export function createLinuxGpuProbe(readFile: (p: string) => Promise<string | nu
           usagePercent: busy ? Number(trimLines(busy)[0]) : undefined,
           memoryUsed: memBusy ? Number(trimLines(memBusy)[0]) : undefined,
           memoryTotal: memTotal ? Number(trimLines(memTotal)[0]) : undefined,
+          temperatureCelsius,
         };
       }
 

@@ -29,12 +29,13 @@ describe("SystemMonitor", () => {
 
   it("reports GPU metrics when a GPU is present", async () => {
     const monitor = new SystemMonitor({
-      gpuProbe: createStaticGpuProbe({ detected: true, name: "Test GPU", usagePercent: 42, memoryUsed: 1000, memoryTotal: 8000 }),
+      gpuProbe: createStaticGpuProbe({ detected: true, name: "Test GPU", usagePercent: 42, memoryUsed: 1000, memoryTotal: 8000, temperatureCelsius: 61 }),
     });
     const metrics = await monitor.collect();
     expect(metrics.gpu.detected).toBe(true);
     expect(metrics.gpu.name).toBe("Test GPU");
     expect(metrics.gpu.usagePercent).toBe(42);
+    expect(metrics.gpu.temperatureCelsius).toBe(61);
   });
 
   it("reports child process resource usage via injected /proc reads", async () => {

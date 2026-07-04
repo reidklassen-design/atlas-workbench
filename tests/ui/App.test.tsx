@@ -26,6 +26,26 @@ describe("App shell", () => {
     controller.dispose();
   });
 
+  it("shows live dashboard throughput and GPU temperature from monitor metrics", async () => {
+    const handlers = baselineHandlers({
+      "monitor.collect": () => ({
+        cpu: { overall: 22, perCore: [20, 24] },
+        ram: { used: 4_000_000_000, total: 16_000_000_000, percent: 25 },
+        gpu: { detected: true, name: "RTX Test", usagePercent: 55, memoryUsed: 8_000_000_000, memoryTotal: 16_000_000_000, temperatureCelsius: 61 },
+        runtime: { source: "llama.cpp", generationTokensPerSecond: 72.4, promptTokensPerSecond: 1300, requestsProcessing: 0, requestsDeferred: 0 },
+        processes: [],
+        ts: Date.now(),
+      }),
+    });
+    const { controller } = await renderApp(<Shell />, handlers);
+
+    expect(screen.getByTestId("dashboard").textContent).toContain("72.4");
+    expect(screen.getByTestId("dashboard").textContent).toContain("61");
+    expect(screen.getByText(/Tokens\/sec: 72.4 tok\/s/i)).toBeDefined();
+    expect(screen.getByText(/GPU temp: 61 °C/i)).toBeDefined();
+    controller.dispose();
+  });
+
   it("shows the first-launch binary prompt when no server binary is configured", async () => {
     const handlers = baselineHandlers({}, () => baselineConfig({ binaryPaths: { server: "", finetune: "" } }));
     const { controller } = await renderApp(<Shell />, handlers);

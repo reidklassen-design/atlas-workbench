@@ -24,13 +24,14 @@ describe("SystemMonitorTab", () => {
       "monitor.collect": () => ({
         cpu: { overall: 10, perCore: [10] },
         ram: { used: 1e9, total: 8e9, percent: 12.5 },
-        gpu: { detected: true, name: "AMD Radeon", usagePercent: 55, memoryUsed: 2_000_000_000, memoryTotal: 8_000_000_000 },
+        gpu: { detected: true, name: "AMD Radeon", usagePercent: 55, memoryUsed: 2_000_000_000, memoryTotal: 8_000_000_000, temperatureCelsius: 63 },
         processes: [],
         ts: Date.now(),
       }),
     });
     const { controller } = await renderApp(<SystemMonitorTab />, handlers);
     expect(screen.getByTestId("gpu-metrics").textContent).toMatch(/AMD Radeon/);
+    expect(screen.getByTestId("gpu-temperature").textContent).toMatch(/63 °C/);
     controller.dispose();
   });
 

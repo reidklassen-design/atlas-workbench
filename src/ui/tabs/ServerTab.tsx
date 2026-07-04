@@ -115,7 +115,7 @@ export function ServerTab(): JSX.Element {
   const gpuLayers = Number(config.serverFlags["n-gpu-layers"] ?? 0);
   const gpuMode = gpuOffloadMode(config);
   const command = buildRedactedServerCommandString(config);
-  const tokensPerSecond = latestTokensPerSecond(logs);
+  const tokensPerSecond = metrics?.runtime?.generationTokensPerSecond !== undefined ? metrics.runtime.generationTokensPerSecond.toFixed(2) : latestTokensPerSecond(logs);
 
   function setGpuLayers(value: number): void {
     void controller.updateConfig((cfg) => ({

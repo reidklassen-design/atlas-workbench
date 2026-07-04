@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { getCurrentWindow, type Window as TauriWindow } from "@tauri-apps/api/window";
 import { clsx } from "clsx";
 import { AppProvider, useAppController, useControllerState } from "@/state/reactBinding";
 import { BinarySetupDialog } from "@/ui/components/BinarySetupDialog";
@@ -30,6 +31,7 @@ interface RuntimeGraphPoint {
   tokensPerSecond: number | null;
   vramPercent: number | null;
   gpuPercent: number | null;
+  gpuTemperatureCelsius: number | null;
   cpuPercent: number;
   ramPercent: number;
 }
@@ -52,6 +54,10 @@ function formatModelName(path: string): string {
   return path.split("/").filter(Boolean).pop() || "No model selected";
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function latestTokensPerSecond(logs: { text: string }[]): number | null {
   for (let i = logs.length - 1; i >= 0; i -= 1) {
     const match = logs[i].text.match(/([0-9]+(?:\.[0-9]+)?)\s+tokens?\s*(?:per\s*second|\/s|t\/s)/i);
@@ -60,19 +66,35 @@ function latestTokensPerSecond(logs: { text: string }[]): number | null {
   return null;
 }
 
+function currentTauriWindow(): TauriWindow | null {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return null;
+  return getCurrentWindow();
+}
+
+function runWindowAction(action: (appWindow: TauriWindow) => Promise<void>): void {
+  const appWindow = currentTauriWindow();
+  if (!appWindow) return;
+  void action(appWindow).catch(() => undefined);
+}
+
+function isInteractiveHeaderTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest("button, a, input, select, textarea, [data-no-drag]"));
+}
+
 function useRuntimeGraphHistory(metrics: SystemMetrics | null, tokensPerSecond: number | null): RuntimeGraphPoint[] {
   const [history, setHistory] = useState<RuntimeGraphPoint[]>([]);
 
   useEffect(() => {
     if (!metrics) return;
-    const memoryUsed = metrics.gpu.memoryUsed;
-    const memoryTotal = metrics.gpu.memoryTotal;
+    const memoryUsed = finiteNumber(metrics.gpu.memoryUsed);
+    const memoryTotal = finiteNumber(metrics.gpu.memoryTotal);
     const vramPercent = memoryUsed !== undefined && memoryTotal ? Math.max(0, Math.min(100, (memoryUsed / memoryTotal) * 100)) : null;
     const point: RuntimeGraphPoint = {
       ts: metrics.ts,
       tokensPerSecond,
       vramPercent,
-      gpuPercent: metrics.gpu.usagePercent ?? null,
+      gpuPercent: finiteNumber(metrics.gpu.usagePercent) ?? null,
+      gpuTemperatureCelsius: finiteNumber(metrics.gpu.temperatureCelsius) ?? null,
       cpuPercent: metrics.cpu.overall,
       ramPercent: metrics.ram.percent,
     };
@@ -84,7 +106,8 @@ function useRuntimeGraphHistory(metrics: SystemMetrics | null, tokensPerSecond: 
         previous.ts === point.ts &&
         previous.tokensPerSecond === point.tokensPerSecond &&
         previous.vramPercent === point.vramPercent &&
-        previous.gpuPercent === point.gpuPercent
+        previous.gpuPercent === point.gpuPercent &&
+        previous.gpuTemperatureCelsius === point.gpuTemperatureCelsius
       ) {
         return current;
       }
@@ -209,10 +232,10 @@ function NeoPerformanceGraph({ history }: { history: RuntimeGraphPoint[] }): JSX
       latest: history.at(-1)?.vramPercent !== null && history.at(-1)?.vramPercent !== undefined ? `${history.at(-1)?.vramPercent?.toFixed(0)}%` : "waiting",
     },
     {
-      name: "GPU load",
+      name: "GPU temp",
       color: "#FFD166",
-      points: graphPath(history, (point) => point.gpuPercent, 100),
-      latest: history.at(-1)?.gpuPercent !== null && history.at(-1)?.gpuPercent !== undefined ? `${history.at(-1)?.gpuPercent?.toFixed(0)}%` : "waiting",
+      points: graphPath(history, (point) => point.gpuTemperatureCelsius, 100),
+      latest: history.at(-1)?.gpuTemperatureCelsius !== null && history.at(-1)?.gpuTemperatureCelsius !== undefined ? `${history.at(-1)?.gpuTemperatureCelsius?.toFixed(0)} °C` : "waiting",
     },
     {
       name: "CPU load",
@@ -266,29 +289,34 @@ function NeoPerformanceGraph({ history }: { history: RuntimeGraphPoint[] }): JSX
 
 function NeoHeader({ server, gateway }: { server: ProcessStatus; gateway: GatewayStatus }): JSX.Element {
   const runtimeLabel = gateway.running ? `Gateway ${gateway.port}` : `Server ${server.state}`;
+  const startWindowDrag = (event: MouseEvent<HTMLElement>) => {
+    if (event.button !== 0 || event.detail > 1 || isInteractiveHeaderTarget(event.target)) return;
+    runWindowAction((appWindow) => appWindow.startDragging());
+  };
+  const toggleWindowMaximize = (event: MouseEvent<HTMLElement>) => {
+    if (isInteractiveHeaderTarget(event.target)) return;
+    runWindowAction((appWindow) => appWindow.toggleMaximize());
+  };
 
   return (
-    <header className="neo-header">
+    <header className="neo-header" data-tauri-drag-region onMouseDown={startWindowDrag} onDoubleClick={toggleWindowMaximize}>
       <div className="neo-header-left">
-        <button type="button" className="neo-icon-button" aria-label="Menu">☰</button>
+        <button type="button" className="neo-icon-button" aria-label="Menu" data-no-drag>☰</button>
         <span className="neo-pill">LOCAL MODE</span>
       </div>
       <div className="neo-brand" aria-label="Atlas Core">
         <img className="neo-brand-mark" src={atlasCoreLogo} alt="" aria-hidden="true" />
-        <div className="text-center">
-          <div className="neo-brand-title">ATLAS CORE</div>
-          <div className="neo-brand-subtitle">LOCAL LLAMA.CPP OPERATIONS</div>
-        </div>
+        <div className="neo-brand-subtitle">LOCAL LLAMA.CPP OPERATIONS</div>
       </div>
       <div className="neo-header-right">
         <span className="neo-status-pill">
           <span className={clsx("h-2 w-2 rounded-full", gateway.running || server.state === "running" ? "bg-[#39FF14]" : "bg-[#31513a]")} />
           {runtimeLabel}
         </span>
-        <div className="neo-window-controls" aria-hidden="true">
-          <span>−</span>
-          <span>□</span>
-          <span>×</span>
+        <div className="neo-window-controls">
+          <button type="button" aria-label="Minimize window" onClick={() => runWindowAction((appWindow) => appWindow.minimize())} data-no-drag>−</button>
+          <button type="button" aria-label="Maximize or restore window" onClick={() => runWindowAction((appWindow) => appWindow.toggleMaximize())} data-no-drag>□</button>
+          <button type="button" aria-label="Close window" onClick={() => runWindowAction((appWindow) => appWindow.close())} data-no-drag>×</button>
         </div>
       </div>
     </header>
@@ -422,14 +450,17 @@ function DashboardPage(): JSX.Element {
   const server = useControllerState((c) => c.server);
   const gateway = useControllerState((c) => c.gateway);
   const logs = useControllerState((c) => c.serverLogs);
-  const tokensPerSecond = useMemo(() => latestTokensPerSecond(logs), [logs]);
+  const fallbackTokensPerSecond = useMemo(() => latestTokensPerSecond(logs), [logs]);
+  const tokensPerSecond = metrics?.runtime?.generationTokensPerSecond ?? fallbackTokensPerSecond;
   const graphHistory = useRuntimeGraphHistory(metrics, tokensPerSecond);
-  const memoryUsed = metrics?.gpu.memoryUsed;
-  const memoryTotal = metrics?.gpu.memoryTotal;
-  const vramPct = memoryUsed !== undefined && memoryTotal ? (memoryUsed / memoryTotal) * 100 : metrics?.gpu.usagePercent ?? 0;
+  const memoryUsed = finiteNumber(metrics?.gpu.memoryUsed);
+  const memoryTotal = finiteNumber(metrics?.gpu.memoryTotal);
+  const gpuUsage = finiteNumber(metrics?.gpu.usagePercent);
+  const vramPct = memoryUsed !== undefined && memoryTotal ? (memoryUsed / memoryTotal) * 100 : gpuUsage ?? 0;
   const vramValue = memoryUsed !== undefined ? (memoryUsed / 1024 / 1024 / 1024).toFixed(1) : "--";
   const vramUnit = memoryUsed !== undefined ? "GB" : "";
   const vramSubtext = memoryTotal ? `${vramPct.toFixed(0)}% of ${formatBytes(memoryTotal)}` : metrics?.gpu.detected ? "VRAM telemetry pending" : "GPU not detected";
+  const gpuTemp = finiteNumber(metrics?.gpu.temperatureCelsius);
   const now = useMemo(() => new Date(), []);
 
   return (
@@ -460,7 +491,13 @@ function DashboardPage(): JSX.Element {
                 subtext={tokensPerSecond === null ? "Waiting for generation" : "latest llama.cpp timing"}
                 progress={tokensPerSecond === null ? 0 : Math.min(100, (tokensPerSecond / 120) * 100)}
               />
-              <NeoGauge label="GPU TEMP" value="--" unit="°C" subtext={metrics?.gpu.detected ? "sensor pending" : "GPU not detected"} progress={0} />
+              <NeoGauge
+                label="GPU TEMP"
+                value={gpuTemp === undefined ? "--" : gpuTemp.toFixed(0)}
+                unit="°C"
+                subtext={gpuTemp === undefined ? (metrics?.gpu.detected ? "temperature telemetry pending" : "GPU not detected") : "live GPU sensor"}
+                progress={gpuTemp === undefined ? 0 : Math.min(100, (gpuTemp / 90) * 100)}
+              />
             </div>
           </NeoCard>
 

@@ -2184,7 +2184,7 @@ fn read_trimmed(path: impl AsRef<Path>) -> Option<String> {
 fn query_nvidia_smi() -> Option<Value> {
     let output = Command::new("nvidia-smi")
         .args([
-            "--query-gpu=name,utilization.gpu,memory.used,memory.total",
+            "--query-gpu=name,utilization.gpu,temperature.gpu,memory.used,memory.total",
             "--format=csv,noheader,nounits",
         ])
         .output()
@@ -2199,16 +2199,28 @@ fn query_nvidia_smi() -> Option<Value> {
         return None;
     }
     let usage = parts.get(1).and_then(|v| v.parse::<f64>().ok());
-    let used = parts.get(2).and_then(|v| v.parse::<u64>().ok()).map(|mib| mib * 1024 * 1024);
-    let total = parts.get(3).and_then(|v| v.parse::<u64>().ok()).map(|mib| mib * 1024 * 1024);
+    let temperature = parts.get(2).and_then(|v| v.parse::<f64>().ok());
+    let used = parts.get(3).and_then(|v| v.parse::<u64>().ok()).map(|mib| mib * 1024 * 1024);
+    let total = parts.get(4).and_then(|v| v.parse::<u64>().ok()).map(|mib| mib * 1024 * 1024);
     Some(json!({
         "detected": true,
         "name": parts[0],
         "usagePercent": usage,
+        "temperatureCelsius": temperature,
         "memoryUsed": used,
         "memoryTotal": total,
         "note": "Detected with nvidia-smi"
     }))
+}
+
+fn read_hwmon_temperature_celsius(device: &Path) -> Option<f64> {
+    let hwmon = device.join("hwmon");
+    for entry in fs::read_dir(hwmon).ok()?.flatten() {
+        let raw = read_trimmed(entry.path().join("temp1_input"))?;
+        let milli_celsius = raw.parse::<f64>().ok()?;
+        return Some(milli_celsius / 1000.0);
+    }
+    None
 }
 
 fn query_gpu_sysfs() -> Value {
@@ -2251,10 +2263,12 @@ fn query_gpu_sysfs() -> Value {
             let usage = read_trimmed(device.join("gpu_busy_percent")).and_then(|v| v.parse::<f64>().ok());
             let used = read_trimmed(device.join("mem_info_vram_used")).and_then(|v| v.parse::<u64>().ok());
             let total = read_trimmed(device.join("mem_info_vram_total")).and_then(|v| v.parse::<u64>().ok());
+            let temperature = read_hwmon_temperature_celsius(&device);
             return json!({
                 "detected": true,
                 "name": name,
                 "usagePercent": usage,
+                "temperatureCelsius": temperature,
                 "memoryUsed": used,
                 "memoryTotal": total,
                 "note": format!("Detected from /sys/class/drm/{}", file_name)
@@ -2267,6 +2281,45 @@ fn query_gpu_sysfs() -> Value {
 
 fn collect_gpu() -> Value {
     query_nvidia_smi().unwrap_or_else(query_gpu_sysfs)
+}
+
+fn prometheus_metric(text: &str, metric: &str) -> Option<f64> {
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let name = parts.next()?;
+        let value = parts.next()?;
+        let plain_name = name.split('{').next().unwrap_or(name);
+        if plain_name == metric {
+            return value.parse::<f64>().ok();
+        }
+    }
+    None
+}
+
+fn collect_runtime_metrics(config: &Value) -> Option<Value> {
+    let host = string_at(config, &["server", "host"]);
+    let port = number_at(config, &["server", "port"], 8099);
+    let (status, body) = http_get_text(&host, port, "/metrics", Duration::from_millis(750)).ok()?;
+    if status != 200 {
+        return None;
+    }
+    let generation = prometheus_metric(&body, "llamacpp:predicted_tokens_seconds");
+    let prompt = prometheus_metric(&body, "llamacpp:prompt_tokens_seconds");
+    let processing = prometheus_metric(&body, "llamacpp:requests_processing");
+    let deferred = prometheus_metric(&body, "llamacpp:requests_deferred");
+    if generation.is_none() && prompt.is_none() && processing.is_none() && deferred.is_none() {
+        return None;
+    }
+    Some(json!({
+        "source": "llama.cpp",
+        "generationTokensPerSecond": generation,
+        "promptTokensPerSecond": prompt,
+        "requestsProcessing": processing,
+        "requestsDeferred": deferred
+    }))
 }
 
 fn read_process_metrics(state: &State<AppState>, pid: usize, name: &str) -> Value {
@@ -2333,6 +2386,7 @@ fn training_check_output(path: String) -> Value {
 
 #[tauri::command]
 fn monitor_collect(state: State<AppState>, pids: Option<Vec<Value>>) -> Value {
+    let config = load_config_value().ok();
     let mut system = System::new_all();
     system.refresh_all();
     let cpus = system.cpus();
@@ -2361,6 +2415,7 @@ fn monitor_collect(state: State<AppState>, pids: Option<Vec<Value>>) -> Value {
         "cpu": { "overall": overall, "perCore": per_core },
         "ram": { "used": used, "total": total, "percent": if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 } },
         "gpu": collect_gpu(),
+        "runtime": config.as_ref().and_then(collect_runtime_metrics),
         "processes": processes,
         "ts": now()
     })

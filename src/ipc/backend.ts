@@ -19,7 +19,7 @@ import {
   fromProcessStartError,
   isPortInUse,
 } from "@/errors/errorMapper";
-import type { AppConfig, AppError, GatewayStatus, ProcessLogLine, ProcessStatus } from "@/config/types";
+import type { AppConfig, AppError, GatewayStatus, ProcessLogLine, ProcessStatus, RuntimeMetrics, SystemMetrics } from "@/config/types";
 
 export class CommandError extends Error {
   constructor(
@@ -58,6 +58,39 @@ function clientHost(host: string): string {
   const trimmed = host.trim();
   if (!trimmed || trimmed === "0.0.0.0" || trimmed === "::" || trimmed === "*") return "127.0.0.1";
   return trimmed.replace(/^\[|\]$/g, "");
+}
+
+function prometheusMetric(text: string, metric: string): number | undefined {
+  const escaped = metric.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = text.match(new RegExp(`^${escaped}(?:\\{[^}]*\\})?\\s+(-?[0-9]+(?:\\.[0-9]+)?)\\s*$`, "m"));
+  return match?.[1] ? Number(match[1]) : undefined;
+}
+
+async function collectRuntimeMetrics(config: AppConfig): Promise<RuntimeMetrics | undefined> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 750);
+  try {
+    const res = await fetch(`http://${clientHost(config.server.host)}:${config.server.port}/metrics`, { signal: controller.signal });
+    if (!res.ok) return undefined;
+    const text = await res.text();
+    const generationTokensPerSecond = prometheusMetric(text, "llamacpp:predicted_tokens_seconds");
+    const promptTokensPerSecond = prometheusMetric(text, "llamacpp:prompt_tokens_seconds");
+    const requestsProcessing = prometheusMetric(text, "llamacpp:requests_processing");
+    const requestsDeferred = prometheusMetric(text, "llamacpp:requests_deferred");
+    if (
+      generationTokensPerSecond === undefined &&
+      promptTokensPerSecond === undefined &&
+      requestsProcessing === undefined &&
+      requestsDeferred === undefined
+    ) {
+      return undefined;
+    }
+    return { source: "llama.cpp", generationTokensPerSecond, promptTokensPerSecond, requestsProcessing, requestsDeferred };
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export class Backend extends EventEmitter {
@@ -217,7 +250,9 @@ export class Backend extends EventEmitter {
       }
       case "monitor.collect": {
         const pids = (args.pids as { pid: number; name: string }[]) ?? [];
-        return this.monitor.collect(pids);
+        const config = await this.configStore.load();
+        const [metrics, runtime] = await Promise.all([this.monitor.collect(pids), collectRuntimeMetrics(config)]);
+        return { ...metrics, runtime } satisfies SystemMetrics;
       }
       case "error.log": {
         await this.errorLog.append(args.error as AppError);
