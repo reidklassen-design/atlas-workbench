@@ -32,6 +32,7 @@ describe("agent CLI snippets", () => {
     expect(snippets.codexRunCommand).toBe("codex --profile atlas-local");
     expect(snippets.codexProfileToml).toContain('model_provider = "atlas"');
     expect(snippets.codexProfileToml).toContain('base_url = "http://127.0.0.1:18080/v1"');
+    expect(snippets.codexProfileToml).toContain('env_key = "OPENAI_API_KEY"');
     expect(snippets.codexProfileToml).toContain("model_context_window = 98304");
   });
 });

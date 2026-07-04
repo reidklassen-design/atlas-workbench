@@ -3,7 +3,7 @@ import type { AgentRequestPolicy, AgentRuntimeConfig, AgentRuntimeProfile, AppCo
 
 const ONE_SECOND = 1000;
 
-export const AGENT_RUNTIME_PROFILE_VERSION = 4;
+export const AGENT_RUNTIME_PROFILE_VERSION = 5;
 
 export function codingRequestPolicy(overrides: Partial<AgentRequestPolicy> = {}): AgentRequestPolicy {
   const contextWindowTokens = overrides.contextWindowTokens ?? 131072;
@@ -239,7 +239,7 @@ export function defaultAgentRuntimeConfig(): AgentRuntimeConfig {
     activeProfileId: "3090-ti-ornith-35b-96k-always-on",
     gateway: {
       enabled: false,
-      host: "127.0.0.1",
+      host: "0.0.0.0",
       port: 18080,
       apiKey: "atlas-local",
       modelAlias: "atlas/3090-ti-ornith-35b-96k-always-on",

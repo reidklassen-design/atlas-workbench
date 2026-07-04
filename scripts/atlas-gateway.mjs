@@ -128,6 +128,32 @@ function sendJson(res, status, body) {
   res.end(raw);
 }
 
+function configuredApiKey(config) {
+  return String(config.agentRuntime?.gateway?.apiKey ?? "").trim();
+}
+
+function requestToken(req) {
+  const raw = req.headers.authorization;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value) return "";
+  const trimmed = value.trim();
+  if (/^bearer\s+/i.test(trimmed)) return trimmed.replace(/^bearer\s+/i, "").trim();
+  if (/^basic\s+/i.test(trimmed)) {
+    try {
+      const decoded = Buffer.from(trimmed.replace(/^basic\s+/i, "").trim(), "base64").toString("utf8");
+      return decoded.includes(":") ? decoded.slice(decoded.indexOf(":") + 1) : decoded;
+    } catch {
+      return "";
+    }
+  }
+  return trimmed;
+}
+
+function isAuthorized(req, config) {
+  const apiKey = configuredApiKey(config);
+  return !apiKey || requestToken(req) === apiKey;
+}
+
 async function proxy(req, res, config, path, body) {
   const upstreamHost = clientHost(config.server?.host);
   const upstreamPort = Number(config.server?.port ?? DEFAULT_UPSTREAM_PORT);
@@ -151,7 +177,7 @@ async function proxy(req, res, config, path, body) {
 function start() {
   const initial = loadConfig();
   const gateway = initial.agentRuntime?.gateway ?? {};
-  const host = gateway.host ?? "127.0.0.1";
+  const host = gateway.host ?? "0.0.0.0";
   const port = Number(process.env.ATLAS_GATEWAY_PORT ?? gateway.port ?? DEFAULT_GATEWAY_PORT);
   let requestCount = 0;
   let compressedCount = 0;
@@ -182,11 +208,21 @@ function start() {
         return;
       }
       if (req.method === "GET" && path === "/v1/models") {
+        if (!isAuthorized(req, config)) {
+          rejectedCount += 1;
+          sendJson(res, 401, { error: { type: "unauthorized", message: "Atlas Gateway requires Authorization: Bearer <api key>." } });
+          return;
+        }
         requestCount += 1;
         await proxy(req, res, config, "/v1/models");
         return;
       }
       if (req.method === "POST" && (path === "/v1/chat/completions" || path === "/v1/completions")) {
+        if (!isAuthorized(req, config)) {
+          rejectedCount += 1;
+          sendJson(res, 401, { error: { type: "unauthorized", message: "Atlas Gateway requires Authorization: Bearer <api key>." } });
+          return;
+        }
         requestCount += 1;
         const raw = await readBody(req);
         const body = JSON.parse(raw);

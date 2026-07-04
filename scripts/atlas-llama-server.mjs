@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 const CONFIG_PATH = process.env.ATLAS_CONFIG ?? `${process.env.HOME}/.config/atlas-workbench/config.json`;
 const DEFAULT_BINARY = `${process.env.HOME}/.local/bin/llama-server`;
 const DEFAULT_MODEL = "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF/ornith-1.0-35b-Q4_K_M.gguf";
-const DEFAULT_HOST = "0.0.0.0";
+const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8099;
 
 const FLAG_NAMES = {

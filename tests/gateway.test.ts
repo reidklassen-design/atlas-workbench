@@ -26,16 +26,22 @@ async function getFreePort(): Promise<number | null> {
   });
 }
 
-function httpJson(port: number, path: string, body?: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
+function httpJson(port: number, path: string, body?: unknown, apiKey = "atlas-local"): Promise<{ status: number; json: Record<string, unknown> }> {
   return new Promise((resolve, reject) => {
     const raw = body === undefined ? undefined : JSON.stringify(body);
+    const headers: Record<string, string | number> = {};
+    if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+    if (raw) {
+      headers["content-type"] = "application/json";
+      headers["content-length"] = Buffer.byteLength(raw);
+    }
     const req = httpRequest(
       {
         host: "127.0.0.1",
         port,
         path,
         method: raw ? "POST" : "GET",
-        headers: raw ? { "content-type": "application/json", "content-length": Buffer.byteLength(raw) } : undefined,
+        headers,
       },
       (res) => {
         let text = "";
@@ -96,6 +102,21 @@ describe("AtlasGateway", () => {
     const models = await httpJson(port, "/v1/models");
     expect(models.status).toBe(200);
     expect(models.json).toEqual({ data: [{ id: "fake/upstream" }] });
+  });
+
+  it("requires the configured api key for OpenAI-compatible routes", async () => {
+    const port = await getFreePort();
+    if (port === null) return;
+    const gateway = new AtlasGateway(fakeFetch());
+    gateways.push(gateway);
+    await gateway.start({ config: configWithGateway(port) });
+
+    const health = await httpJson(port, "/health", undefined, "");
+    expect(health.status).toBe(200);
+
+    const models = await httpJson(port, "/v1/models", undefined, "");
+    expect(models.status).toBe(401);
+    expect(JSON.stringify(models.json)).toContain("unauthorized");
   });
 
   it("forwards bounded chat completion requests", async () => {

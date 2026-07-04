@@ -85,8 +85,9 @@ export function buildAgentCliSnippets(gateway: AgentGatewayConfig, profile: Agen
     "[model_providers.atlas]",
     `name = "Atlas Gateway"`,
     `base_url = "${baseUrl}"`,
+    `env_key = "OPENAI_API_KEY"`,
     "",
-    "# Atlas is local-only by default. Leave env_key unset unless you add auth enforcement to the gateway.",
+    "# Atlas Gateway accepts OpenAI-compatible Authorization: Bearer tokens.",
     "# Chat Completions local providers are supported by Codex today; Responses API proxying is the next Atlas hardening step.",
   ].join("\n");
 

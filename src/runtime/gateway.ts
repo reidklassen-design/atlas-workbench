@@ -26,6 +26,32 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(raw);
 }
 
+function configuredApiKey(config: AppConfig): string {
+  return config.agentRuntime.gateway.apiKey.trim();
+}
+
+function requestToken(req: IncomingMessage): string {
+  const raw = req.headers.authorization;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value) return "";
+  const trimmed = value.trim();
+  if (/^bearer\s+/i.test(trimmed)) return trimmed.replace(/^bearer\s+/i, "").trim();
+  if (/^basic\s+/i.test(trimmed)) {
+    try {
+      const decoded = Buffer.from(trimmed.replace(/^basic\s+/i, "").trim(), "base64").toString("utf8");
+      return decoded.includes(":") ? decoded.slice(decoded.indexOf(":") + 1) : decoded;
+    } catch {
+      return "";
+    }
+  }
+  return trimmed;
+}
+
+function isAuthorized(req: IncomingMessage, config: AppConfig): boolean {
+  const apiKey = configuredApiKey(config);
+  return apiKey === "" || requestToken(req) === apiKey;
+}
+
 function readBody(req: IncomingMessage, limitBytes = 64 * 1024 * 1024): Promise<string> {
   return new Promise((resolve, reject) => {
     let total = 0;
@@ -200,6 +226,11 @@ export class AtlasGateway {
     const path = new URL(req.url ?? "/", "http://atlas.local").pathname;
     if (req.method === "GET" && path === "/health") {
       sendJson(res, 200, { status: "ok", gateway: this.status(), upstream: await this.health() });
+      return;
+    }
+    if (!isAuthorized(req, this.config)) {
+      this.rejectedCount += 1;
+      sendJson(res, 401, { error: { message: "Atlas Gateway requires Authorization: Bearer <api key>.", type: "unauthorized" } });
       return;
     }
     if (req.method === "GET" && path === "/v1/models") {

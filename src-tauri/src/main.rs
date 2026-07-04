@@ -20,7 +20,7 @@ use uuid::Uuid;
 const SERVER_READY_TIMEOUT_SECS: u64 = 600;
 const HEALTH_PROGRESS_LOG_SECS: u64 = 5;
 const PROCESS_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
-const OPTIMIZED_PROFILE_VERSION: i64 = 4;
+const OPTIMIZED_PROFILE_VERSION: i64 = 5;
 
 #[derive(Default)]
 struct AppState {
@@ -106,7 +106,7 @@ fn default_config() -> Value {
             "directory": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF",
             "selectedModel": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF/ornith-1.0-35b-Q4_K_M.gguf"
         },
-        "server": { "host": "0.0.0.0", "port": 8099 },
+        "server": { "host": "127.0.0.1", "port": 8099 },
         "serverFlags": {
             "alias": "Ornith1",
             "ctx-size": 98304,
@@ -370,7 +370,7 @@ fn default_agent_runtime_config() -> Value {
         "activeProfileId": "3090-ti-ornith-35b-96k-always-on",
         "gateway": {
             "enabled": false,
-            "host": "127.0.0.1",
+            "host": "0.0.0.0",
             "port": 18080,
             "apiKey": "atlas-local",
             "modelAlias": "atlas/3090-ti-ornith-35b-96k-always-on",
@@ -465,9 +465,14 @@ fn load_config_value() -> Result<Value, AppError> {
             runtime.insert("activeProfileId".to_string(), json!("3090-ti-ornith-35b-96k-always-on"));
             runtime.insert("profiles".to_string(), default_agent_runtime_profiles());
             if let Some(gateway) = runtime.get_mut("gateway").and_then(Value::as_object_mut) {
+                gateway.insert("host".to_string(), json!("0.0.0.0"));
                 gateway.insert("modelAlias".to_string(), json!("atlas/3090-ti-ornith-35b-96k-always-on"));
                 gateway.insert("autoCompressionEnabled".to_string(), json!(true));
             }
+        }
+        if let Some(server) = config.get_mut("server").and_then(Value::as_object_mut) {
+            server.insert("host".to_string(), json!("127.0.0.1"));
+            server.insert("port".to_string(), json!(8099));
         }
         if let Some(gpu) = config.get_mut("gpu").and_then(Value::as_object_mut) {
             gpu.insert("optimizedProfileVersion".to_string(), json!(OPTIMIZED_PROFILE_VERSION));
@@ -1736,6 +1741,7 @@ fn http_response(status: u16, content_type: &str, body: &str) -> Vec<u8> {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
         404 => "Not Found",
         413 => "Payload Too Large",
         502 => "Bad Gateway",
@@ -1802,6 +1808,35 @@ fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, HashMap<
     Ok((method, path, headers, body))
 }
 
+fn gateway_api_key(config: &Value) -> String {
+    string_at(config, &["agentRuntime", "gateway", "apiKey"]).trim().to_string()
+}
+
+fn gateway_request_token(headers: &HashMap<String, String>) -> String {
+    let Some(raw) = headers.get("authorization") else {
+        return String::new();
+    };
+    let trimmed = raw.trim();
+    if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
+        return trimmed[7..].trim().to_string();
+    }
+    if trimmed.len() >= 6 && trimmed[..6].eq_ignore_ascii_case("basic ") {
+        use base64::Engine;
+        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(trimmed[6..].trim()) {
+            if let Ok(text) = String::from_utf8(decoded) {
+                return text.split_once(':').map(|(_, token)| token.to_string()).unwrap_or(text);
+            }
+        }
+        return String::new();
+    }
+    trimmed.to_string()
+}
+
+fn gateway_request_authorized(headers: &HashMap<String, String>, config: &Value) -> bool {
+    let api_key = gateway_api_key(config);
+    api_key.is_empty() || gateway_request_token(headers) == api_key
+}
+
 fn proxy_http_request(config: &Value, method: &str, path: &str, body: &[u8], content_type: &str) -> Result<(u16, String, String), String> {
     let host = string_at(config, &["server", "host"]);
     let port = number_at(config, &["server", "port"], 8080);
@@ -1851,6 +1886,8 @@ fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128
                 })
                 .to_string();
                 http_response(200, "application/json", &body)
+            } else if !gateway_request_authorized(&headers, config) {
+                http_response(401, "application/json", &json!({ "error": { "message": "Atlas Gateway requires Authorization: Bearer <api key>.", "type": "unauthorized" } }).to_string())
             } else if method == "GET" && path == "/v1/models" {
                 match proxy_http_request(config, "GET", "/v1/models", &[], "application/json") {
                     Ok((status, content_type, body)) => http_response(status, &content_type, &body),

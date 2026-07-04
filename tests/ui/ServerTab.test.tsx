@@ -11,7 +11,7 @@ describe("ServerTab", () => {
     expect((screen.getByTestId("start-server") as HTMLButtonElement)).toBeDefined();
     expect((screen.getByTestId("stop-server") as HTMLButtonElement)).toBeDefined();
     expect(screen.getByTestId("server-log-file").textContent).toContain("server.log");
-    expect((screen.getByTestId("server-host") as HTMLInputElement).value).toBe("0.0.0.0");
+    expect((screen.getByTestId("server-host") as HTMLInputElement).value).toBe("127.0.0.1");
     expect((screen.getByTestId("server-port") as HTMLInputElement).value).toBe("8099");
     controller.dispose();
   });
