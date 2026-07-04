@@ -1,0 +1,13 @@
+[Unit]
+Description=Atlas headless local AI gateway
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/node %h/.local/bin/atlas-gateway.mjs
+Restart=always
+RestartSec=2
+Environment=ATLAS_CONFIG=%h/.config/atlas-workbench/config.json
+
+[Install]
+WantedBy=default.target

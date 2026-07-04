@@ -16,9 +16,9 @@ describe("agent CLI snippets", () => {
     const snippets = buildAgentCliSnippets(runtime.gateway, profile);
     const config = JSON.parse(snippets.openCodeConfigJson);
 
-    expect(config.model).toBe("atlas-gateway/atlas/3090-ti-ornith-35b-125k-stable");
+    expect(config.model).toBe("atlas-gateway/atlas/3090-ti-ornith-35b-96k-always-on");
     expect(config.provider["atlas-gateway"].options.baseURL).toBe("http://127.0.0.1:18080/v1");
-    expect(config.provider["atlas-gateway"].models[runtime.gateway.modelAlias].limit.context).toBe(125000);
+    expect(config.provider["atlas-gateway"].models[runtime.gateway.modelAlias].limit.context).toBe(98304);
     expect(config.provider["atlas-gateway"].models[runtime.gateway.modelAlias].limit.input).toBe(profile.requestPolicy.maxPromptTokens);
     expect(config.compaction.auto).toBe(true);
   });
@@ -32,6 +32,6 @@ describe("agent CLI snippets", () => {
     expect(snippets.codexRunCommand).toBe("codex --profile atlas-local");
     expect(snippets.codexProfileToml).toContain('model_provider = "atlas"');
     expect(snippets.codexProfileToml).toContain('base_url = "http://127.0.0.1:18080/v1"');
-    expect(snippets.codexProfileToml).toContain("model_context_window = 125000");
+    expect(snippets.codexProfileToml).toContain("model_context_window = 98304");
   });
 });

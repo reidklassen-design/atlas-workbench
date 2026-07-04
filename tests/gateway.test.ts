@@ -68,7 +68,7 @@ function fakeFetch(seenBodies: string[] = []): typeof fetch {
 }
 
 function configWithGateway(port: number): AppConfig {
-  const config = applyAgentProfile(defaultConfig(), "3090-ti-ornith-35b-125k-stable");
+  const config = applyAgentProfile(defaultConfig(), "3090-ti-ornith-35b-96k-always-on");
   config.agentRuntime.gateway.port = port;
   config.server.port = 8099;
   return config;
@@ -106,7 +106,7 @@ describe("AtlasGateway", () => {
     await gateway.start({ config: configWithGateway(port) });
 
     const result = await httpJson(port, "/v1/chat/completions", {
-      model: "atlas/3090-ti-ornith-35b-125k-stable",
+      model: "atlas/3090-ti-ornith-35b-96k-always-on",
       messages: [{ role: "user", content: "Change one file." }],
       max_tokens: 1024,
     });
@@ -126,7 +126,7 @@ describe("AtlasGateway", () => {
     const huge = "token ".repeat(120000);
 
     const result = await httpJson(port, "/v1/chat/completions", {
-      model: "atlas/3090-ti-ornith-35b-125k-stable",
+      model: "atlas/3090-ti-ornith-35b-96k-always-on",
       messages: [{ role: "user", content: huge }],
       max_tokens: 1024,
     });
@@ -147,7 +147,7 @@ describe("AtlasGateway", () => {
     const huge = "token ".repeat(120000);
 
     const result = await httpJson(port, "/v1/chat/completions", {
-      model: "atlas/3090-ti-ornith-35b-125k-stable",
+      model: "atlas/3090-ti-ornith-35b-96k-always-on",
       messages: [{ role: "user", content: huge }],
       max_tokens: 1024,
     });

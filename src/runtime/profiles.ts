@@ -3,7 +3,7 @@ import type { AgentRequestPolicy, AgentRuntimeConfig, AgentRuntimeProfile, AppCo
 
 const ONE_SECOND = 1000;
 
-export const AGENT_RUNTIME_PROFILE_VERSION = 2;
+export const AGENT_RUNTIME_PROFILE_VERSION = 4;
 
 export function codingRequestPolicy(overrides: Partial<AgentRequestPolicy> = {}): AgentRequestPolicy {
   const contextWindowTokens = overrides.contextWindowTokens ?? 131072;
@@ -35,10 +35,45 @@ function serverFlags(overrides: FlagValues): FlagValues {
 export function defaultAgentRuntimeProfiles(): AgentRuntimeProfile[] {
   return [
     {
-      id: "3090-ti-ornith-35b-125k-stable",
-      name: "3090 Ti Ornith 35B 125K Stable",
+      id: "3090-ti-ornith-35b-96k-always-on",
+      name: "3090 Ti Ornith 35B 96K Always-On",
       role: "main-coding",
-      description: "Stable long-context coding profile for the loaded Ornith 35B Q4 model on this RTX 3090 Ti box.",
+      description: "Default local agent endpoint: keeps Ornith 35B loaded with enough headroom for long runs, compression, and recovery.",
+      modelDirectory: "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF",
+      modelPath: "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF/ornith-1.0-35b-Q4_K_M.gguf",
+      gpuOffloadMode: "auto",
+      serverFlagOverrides: serverFlags({
+        alias: "Ornith1",
+        "ctx-size": 98304,
+        parallel: 1,
+        "batch-size": 1024,
+        "ubatch-size": 256,
+        "flash-attn": "on",
+        "cache-type-k": "q8_0",
+        "cache-type-v": "q8_0",
+        "cont-batching": true,
+        slots: true,
+        metrics: true,
+        "context-shift": true,
+        predict: 8192,
+        reasoning: "off",
+        "reasoning-budget": 0,
+        threads: 16,
+        "threads-batch": 16,
+      }),
+      requestPolicy: codingRequestPolicy({
+        contextWindowTokens: 98304,
+        reservedOutputTokens: 8192,
+        maxOutputTokens: 8192,
+        maxSingleFileTokens: 18000,
+        maxLogTokens: 12000,
+      }),
+    },
+    {
+      id: "3090-ti-ornith-35b-125k-max-context",
+      name: "3090 Ti Ornith 35B 125K Max Context",
+      role: "main-coding",
+      description: "Maximum-context mode for deliberate large reads. Use when you need the biggest window more than all-day headroom.",
       modelDirectory: "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF",
       modelPath: "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF/ornith-1.0-35b-Q4_K_M.gguf",
       gpuOffloadMode: "auto",
@@ -56,6 +91,8 @@ export function defaultAgentRuntimeProfiles(): AgentRuntimeProfile[] {
         metrics: true,
         "context-shift": true,
         predict: 8192,
+        reasoning: "off",
+        "reasoning-budget": 0,
         threads: 16,
         "threads-batch": 16,
       }),
@@ -89,6 +126,8 @@ export function defaultAgentRuntimeProfiles(): AgentRuntimeProfile[] {
         metrics: true,
         "context-shift": true,
         predict: 8192,
+        reasoning: "off",
+        "reasoning-budget": 0,
       }),
       requestPolicy: codingRequestPolicy({
         contextWindowTokens: 98304,
@@ -120,6 +159,8 @@ export function defaultAgentRuntimeProfiles(): AgentRuntimeProfile[] {
         metrics: true,
         "context-shift": true,
         predict: 8192,
+        reasoning: "off",
+        "reasoning-budget": 0,
       }),
       requestPolicy: codingRequestPolicy({
         contextWindowTokens: 65536,
@@ -195,13 +236,13 @@ export function defaultAgentRuntimeProfiles(): AgentRuntimeProfile[] {
 
 export function defaultAgentRuntimeConfig(): AgentRuntimeConfig {
   return {
-    activeProfileId: "3090-ti-ornith-35b-125k-stable",
+    activeProfileId: "3090-ti-ornith-35b-96k-always-on",
     gateway: {
       enabled: false,
       host: "127.0.0.1",
       port: 18080,
       apiKey: "atlas-local",
-      modelAlias: "atlas/3090-ti-ornith-35b-125k-stable",
+      modelAlias: "atlas/3090-ti-ornith-35b-96k-always-on",
       autoCompressionEnabled: true,
     },
     profiles: defaultAgentRuntimeProfiles(),

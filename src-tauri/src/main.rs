@@ -20,7 +20,7 @@ use uuid::Uuid;
 const SERVER_READY_TIMEOUT_SECS: u64 = 600;
 const HEALTH_PROGRESS_LOG_SECS: u64 = 5;
 const PROCESS_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
-const OPTIMIZED_PROFILE_VERSION: i64 = 2;
+const OPTIMIZED_PROFILE_VERSION: i64 = 4;
 
 #[derive(Default)]
 struct AppState {
@@ -109,7 +109,7 @@ fn default_config() -> Value {
         "server": { "host": "0.0.0.0", "port": 8099 },
         "serverFlags": {
             "alias": "Ornith1",
-            "ctx-size": 125000,
+            "ctx-size": 98304,
             "n-gpu-layers": 999,
             "threads": 16,
             "threads-batch": 16,
@@ -121,6 +121,8 @@ fn default_config() -> Value {
             "metrics": true,
             "context-shift": true,
             "predict": 8192,
+            "reasoning": "auto",
+            "reasoning-budget": -1,
             "temp": 0.8,
             "top-k": 40,
             "top-p": 0.95,
@@ -180,7 +182,7 @@ fn agent_request_policy(
 fn profile_flags(overrides: Value) -> Value {
     let mut flags = json!({
         "alias": "Ornith1",
-        "ctx-size": 125000,
+        "ctx-size": 98304,
         "n-gpu-layers": 999,
         "threads": 16,
         "threads-batch": 16,
@@ -194,7 +196,9 @@ fn profile_flags(overrides: Value) -> Value {
         "slots": true,
         "metrics": true,
         "context-shift": true,
-        "predict": 8192
+        "predict": 8192,
+        "reasoning": "off",
+        "reasoning-budget": 0
     });
     merge_value(&mut flags, overrides);
     flags
@@ -203,10 +207,39 @@ fn profile_flags(overrides: Value) -> Value {
 fn default_agent_runtime_profiles() -> Value {
     json!([
         {
-            "id": "3090-ti-ornith-35b-125k-stable",
-            "name": "3090 Ti Ornith 35B 125K Stable",
+            "id": "3090-ti-ornith-35b-96k-always-on",
+            "name": "3090 Ti Ornith 35B 96K Always-On",
             "role": "main-coding",
-            "description": "Stable long-context coding profile for the loaded Ornith 35B Q4 model on this RTX 3090 Ti box.",
+            "description": "Default local agent endpoint: keeps Ornith 35B loaded with enough headroom for long runs, compression, and recovery.",
+            "modelDirectory": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF",
+            "modelPath": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF/ornith-1.0-35b-Q4_K_M.gguf",
+            "gpuOffloadMode": "auto",
+            "serverFlagOverrides": profile_flags(json!({
+                "alias": "Ornith1",
+                "ctx-size": 98304,
+                "parallel": 1,
+                "batch-size": 1024,
+                "ubatch-size": 256,
+                "flash-attn": "on",
+                "cache-type-k": "q8_0",
+                "cache-type-v": "q8_0",
+                "cont-batching": true,
+                "slots": true,
+                "metrics": true,
+                "context-shift": true,
+                "predict": 8192,
+                "reasoning": "off",
+                "reasoning-budget": 0,
+                "threads": 16,
+                "threads-batch": 16
+            })),
+            "requestPolicy": agent_request_policy(98304, 8192, 18000, 12000, "reject")
+        },
+        {
+            "id": "3090-ti-ornith-35b-125k-max-context",
+            "name": "3090 Ti Ornith 35B 125K Max Context",
+            "role": "main-coding",
+            "description": "Maximum-context mode for deliberate large reads. Use when you need the biggest window more than all-day headroom.",
             "modelDirectory": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF",
             "modelPath": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF/ornith-1.0-35b-Q4_K_M.gguf",
             "gpuOffloadMode": "auto",
@@ -224,6 +257,8 @@ fn default_agent_runtime_profiles() -> Value {
                 "metrics": true,
                 "context-shift": true,
                 "predict": 8192,
+                "reasoning": "off",
+                "reasoning-budget": 0,
                 "threads": 16,
                 "threads-batch": 16
             })),
@@ -250,7 +285,9 @@ fn default_agent_runtime_profiles() -> Value {
                 "slots": true,
                 "metrics": true,
                 "context-shift": true,
-                "predict": 8192
+                "predict": 8192,
+                "reasoning": "off",
+                "reasoning-budget": 0
             })),
             "requestPolicy": agent_request_policy(98304, 8192, 18000, 12000, "reject")
         },
@@ -275,7 +312,9 @@ fn default_agent_runtime_profiles() -> Value {
                 "slots": true,
                 "metrics": true,
                 "context-shift": true,
-                "predict": 8192
+                "predict": 8192,
+                "reasoning": "off",
+                "reasoning-budget": 0
             })),
             "requestPolicy": agent_request_policy(65536, 8192, 16000, 12000, "reject")
         },
@@ -328,13 +367,13 @@ fn default_agent_runtime_profiles() -> Value {
 
 fn default_agent_runtime_config() -> Value {
     json!({
-        "activeProfileId": "3090-ti-ornith-35b-125k-stable",
+        "activeProfileId": "3090-ti-ornith-35b-96k-always-on",
         "gateway": {
             "enabled": false,
             "host": "127.0.0.1",
             "port": 18080,
             "apiKey": "atlas-local",
-            "modelAlias": "atlas/3090-ti-ornith-35b-125k-stable",
+            "modelAlias": "atlas/3090-ti-ornith-35b-96k-always-on",
             "autoCompressionEnabled": true
         },
         "profiles": default_agent_runtime_profiles()
@@ -376,7 +415,7 @@ fn load_config_value() -> Result<Value, AppError> {
     if profile_version < 1 && collect_gpu().get("detected").and_then(Value::as_bool).unwrap_or(false) {
         if let Some(flags) = config.get_mut("serverFlags").and_then(Value::as_object_mut) {
             flags.insert("alias".to_string(), json!("Ornith1"));
-            flags.insert("ctx-size".to_string(), json!(125000));
+            flags.insert("ctx-size".to_string(), json!(98304));
             flags.insert("n-gpu-layers".to_string(), json!(999));
             flags.insert("flash-attn".to_string(), json!("on"));
             flags.insert("cache-type-k".to_string(), json!("q8_0"));
@@ -391,6 +430,8 @@ fn load_config_value() -> Result<Value, AppError> {
             flags.insert("metrics".to_string(), json!(true));
             flags.insert("context-shift".to_string(), json!(true));
             flags.insert("predict".to_string(), json!(8192));
+            flags.insert("reasoning".to_string(), json!("off"));
+            flags.insert("reasoning-budget".to_string(), json!(0));
         }
         if let Some(gpu) = config.get_mut("gpu").and_then(Value::as_object_mut) {
             gpu.insert("optimizedProfileVersion".to_string(), json!(1));
@@ -402,7 +443,7 @@ fn load_config_value() -> Result<Value, AppError> {
     if profile_version < OPTIMIZED_PROFILE_VERSION && collect_gpu().get("detected").and_then(Value::as_bool).unwrap_or(false) {
         if let Some(flags) = config.get_mut("serverFlags").and_then(Value::as_object_mut) {
             flags.insert("alias".to_string(), json!("Ornith1"));
-            flags.insert("ctx-size".to_string(), json!(125000));
+            flags.insert("ctx-size".to_string(), json!(98304));
             flags.insert("n-gpu-layers".to_string(), json!(999));
             flags.insert("flash-attn".to_string(), json!("on"));
             flags.insert("cache-type-k".to_string(), json!("q8_0"));
@@ -417,12 +458,15 @@ fn load_config_value() -> Result<Value, AppError> {
             flags.insert("metrics".to_string(), json!(true));
             flags.insert("context-shift".to_string(), json!(true));
             flags.insert("predict".to_string(), json!(8192));
+            flags.insert("reasoning".to_string(), json!("off"));
+            flags.insert("reasoning-budget".to_string(), json!(0));
         }
         if let Some(runtime) = config.get_mut("agentRuntime").and_then(Value::as_object_mut) {
-            runtime.insert("activeProfileId".to_string(), json!("3090-ti-ornith-35b-125k-stable"));
+            runtime.insert("activeProfileId".to_string(), json!("3090-ti-ornith-35b-96k-always-on"));
             runtime.insert("profiles".to_string(), default_agent_runtime_profiles());
             if let Some(gateway) = runtime.get_mut("gateway").and_then(Value::as_object_mut) {
-                gateway.insert("modelAlias".to_string(), json!("atlas/3090-ti-ornith-35b-125k-stable"));
+                gateway.insert("modelAlias".to_string(), json!("atlas/3090-ti-ornith-35b-96k-always-on"));
+                gateway.insert("autoCompressionEnabled".to_string(), json!(true));
             }
         }
         if let Some(gpu) = config.get_mut("gpu").and_then(Value::as_object_mut) {
@@ -695,7 +739,7 @@ fn server_default_value(id: &str) -> Option<Value> {
         "draft-max" => json!(16),
         "draft-min" => json!(5),
         "draft-p-min" => json!(0.9),
-        "ctx-size" => json!(125000),
+        "ctx-size" => json!(98304),
         "batch-size" => json!(1024),
         "ubatch-size" => json!(256),
         "keep" => json!(0),
@@ -721,6 +765,7 @@ fn server_default_value(id: &str) -> Option<Value> {
         "samplers" => json!("top_k;typ_p;top_p;min_p;temperature"),
         "seed" => json!(-1),
         "jinja" => json!(false),
+        "reasoning" => json!("auto"),
         "reasoning-format" => json!("deepseek"),
         "escape" => json!(false),
         "rope-scaling" => json!("none"),
@@ -1499,9 +1544,9 @@ fn runtime_apply_profile(profile_id: String) -> Result<Value, AppError> {
     let active = string_at(&config, &["agentRuntime", "activeProfileId"]);
     let requested = if profile_id.trim().is_empty() { active.as_str() } else { profile_id.trim() };
     let profile = find_runtime_profile(&config, requested)
-        .or_else(|| find_runtime_profile(&config, "3090-ti-ornith-35b-125k-stable"))
+        .or_else(|| find_runtime_profile(&config, "3090-ti-ornith-35b-96k-always-on"))
         .ok_or_else(|| app_error("agent-runtime", "Runtime profile unavailable", "Atlas could not find a usable agent runtime profile.", "Reset config or reinstall Atlas Workbench."))?;
-    let resolved_id = profile.get("id").and_then(Value::as_str).unwrap_or("3090-ti-ornith-35b-125k-stable").to_string();
+    let resolved_id = profile.get("id").and_then(Value::as_str).unwrap_or("3090-ti-ornith-35b-96k-always-on").to_string();
 
     if let Some(flags) = profile.get("serverFlagOverrides").and_then(Value::as_object) {
         let target = config.get_mut("serverFlags").and_then(Value::as_object_mut)
@@ -1672,13 +1717,13 @@ fn compress_openai_request(mut body: Value, max_prompt_tokens: i64) -> (Value, b
 
 fn active_profile(config: &Value) -> Option<Value> {
     let id = string_at(config, &["agentRuntime", "activeProfileId"]);
-    find_runtime_profile(config, &id).or_else(|| find_runtime_profile(config, "3090-ti-ornith-35b-125k-stable"))
+    find_runtime_profile(config, &id).or_else(|| find_runtime_profile(config, "3090-ti-ornith-35b-96k-always-on"))
 }
 
 fn active_max_prompt_tokens(config: &Value) -> i64 {
     active_profile(config)
-        .and_then(|profile| profile.get("requestPolicy").and_then(|policy| policy.get("maxPromptTokens")).and_then(Value::as_i64).or(Some(104520)))
-        .unwrap_or(104520)
+        .and_then(|profile| profile.get("requestPolicy").and_then(|policy| policy.get("maxPromptTokens")).and_then(Value::as_i64).or(Some(77824)))
+        .unwrap_or(77824)
 }
 
 fn gateway_auto_compression_enabled(config: &Value) -> bool {

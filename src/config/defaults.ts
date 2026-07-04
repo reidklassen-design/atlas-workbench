@@ -8,7 +8,7 @@ export function defaultConfig(): AppConfig {
   return {
     schemaVersion: CONFIG_SCHEMA_VERSION,
     binaryPaths: { server: "/home/reid/.local/bin/llama-server", finetune: "/home/reid/.local/bin/llama-finetune" },
-    gpu: { autoOffloadInitialized: false, optimizedProfileVersion: 2, offloadMode: "auto" },
+    gpu: { autoOffloadInitialized: false, optimizedProfileVersion: 4, offloadMode: "auto" },
     model: {
       directory: "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF",
       selectedModel: "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF/ornith-1.0-35b-Q4_K_M.gguf",

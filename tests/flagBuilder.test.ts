@@ -51,7 +51,7 @@ describe("buildServerArgs", () => {
 
   it("optimized defaults let llama.cpp auto-fit GPU offload instead of forcing all layers", () => {
     const args = buildServerArgs(cfg());
-    expect(args[args.indexOf("--ctx-size") + 1]).toBe("125000");
+    expect(args[args.indexOf("--ctx-size") + 1]).toBe("98304");
     expect(args).not.toContain("--n-gpu-layers");
     expect(describeGpuOffload(cfg())).toMatch(/auto-fit/i);
     expect(args[args.indexOf("--alias") + 1]).toBe("Ornith1");
@@ -63,6 +63,8 @@ describe("buildServerArgs", () => {
     expect(args[args.indexOf("--cache-type-v") + 1]).toBe("q8_0");
     expect(args[args.indexOf("--threads") + 1]).toBe("16");
     expect(args[args.indexOf("--threads-batch") + 1]).toBe("16");
+    expect(args).not.toContain("--reasoning");
+    expect(args).not.toContain("--reasoning-budget");
   });
 
   it("emits --n-gpu-layers when changed from default", () => {
@@ -82,7 +84,7 @@ describe("buildServerArgs", () => {
 
   it("emits optimized default flags but omits ordinary unchanged defaults", () => {
     const args = buildServerArgs(cfg());
-    expect(args[args.indexOf("--ctx-size") + 1]).toBe("125000");
+    expect(args[args.indexOf("--ctx-size") + 1]).toBe("98304");
     expect(args).not.toContain("--n-gpu-layers");
     expect(args[args.indexOf("--flash-attn") + 1]).toBe("on");
     expect(args).not.toContain("--mlock");
