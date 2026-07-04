@@ -53,12 +53,13 @@ export function FlagWidget({ def, value, onChange }: FlagWidgetProps): JSX.Eleme
       {def.type === "enum" ? (
         <select
           className="input"
+          style={{ backgroundColor: "rgba(7, 19, 13, 0.18)", color: "#E8FFF0", colorScheme: "dark" }}
           value={String(value)}
           onChange={(e) => onChange(e.target.value)}
           aria-describedby={helpId}
         >
           {def.options?.map((opt) => (
-            <option key={opt} value={opt}>
+            <option key={opt} value={opt} style={{ backgroundColor: "#07130D", color: "#E8FFF0" }}>
               {opt}
             </option>
           ))}

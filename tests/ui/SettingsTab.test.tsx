@@ -134,6 +134,8 @@ describe("SettingsTab flags", () => {
 
     expect(splitMode.value).toBe("row");
     expect(splitMode.className).toContain("input");
+    expect(splitMode.style.color).toBe("rgb(232, 255, 240)");
+    expect(splitMode.style.backgroundColor).toBe("rgba(7, 19, 13, 0.18)");
     controller.dispose();
   });
 
