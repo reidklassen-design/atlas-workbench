@@ -37,17 +37,17 @@
   .neo-header {
     position: relative;
     display: grid;
-    grid-template-columns: minmax(230px, 1fr) auto minmax(230px, 1fr);
+    grid-template-columns: minmax(280px, 1fr) minmax(15rem, 19rem) minmax(280px, 1fr);
     align-items: start;
     gap: 1rem;
-    min-height: 154px;
+    min-height: 142px;
     border: 1px solid rgba(61, 122, 50, 0.68);
     background:
       linear-gradient(135deg, transparent 0 4%, rgba(7, 19, 13, 0.98) 4% 38%, rgba(3, 8, 6, 0.98) 38% 62%, rgba(7, 19, 13, 0.98) 62% 96%, transparent 96%),
       #030806;
     box-shadow: 0 14px 40px rgba(0, 0, 0, 0.38), inset 0 -1px 0 rgba(124, 255, 43, 0.08);
     padding: 0.85rem 1rem 1.05rem;
-    clip-path: polygon(0 0, 20% 0, 21.5% 26%, 36% 26%, 38.5% 100%, 61.5% 100%, 64% 26%, 78.5% 26%, 80% 0, 100% 0, 100% 88%, 99.2% 100%, 0.8% 100%, 0 88%);
+    clip-path: polygon(0 0, 100% 0, 100% 88%, 99.2% 100%, 0.8% 100%, 0 88%);
   }
   .neo-header::after {
     content: "";
@@ -62,7 +62,7 @@
   .neo-header-left,
   .neo-header-right {
     position: relative;
-    z-index: 3;
+    z-index: 20;
     display: flex;
     align-items: center;
     gap: 0.65rem;
@@ -137,28 +137,26 @@
     box-shadow: 0 0 18px rgba(255, 77, 77, 0.18), inset 0 0 18px rgba(255, 77, 77, 0.08);
   }
   .neo-brand {
-    position: absolute;
-    z-index: 5;
-    top: 0.1rem;
-    left: 50%;
-    width: 18rem;
-    transform: translateX(-50%);
+    position: relative;
+    z-index: 2;
+    width: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 0;
+    margin-top: -0.75rem;
     pointer-events: none;
   }
   .neo-brand-mark {
-    height: 9.25rem;
-    width: 18rem;
+    height: 8rem;
+    width: min(18rem, 100%);
     border-radius: 0;
-    filter: drop-shadow(0 0 32px rgba(57, 255, 20, 0.7));
+    filter: drop-shadow(0 0 28px rgba(57, 255, 20, 0.65));
     object-fit: contain;
   }
   .neo-brand-subtitle {
-    margin-top: -1.05rem;
+    margin-top: -0.9rem;
     font-size: 0.66rem;
     font-weight: 700;
     letter-spacing: 0.18em;
