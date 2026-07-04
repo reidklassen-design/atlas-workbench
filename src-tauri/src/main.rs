@@ -2470,6 +2470,33 @@ fn should_keep_runtime_baseline(current: RuntimeCounterSample, previous: Option<
     current.generation_tokens_total == previous.generation_tokens_total && current.prompt_tokens_total == previous.prompt_tokens_total
 }
 
+fn collect_runtime_slot_context(config: &Value) -> (Option<i64>, Option<i64>) {
+    let host = string_at(config, &["server", "host"]);
+    let port = number_at(config, &["server", "port"], 8099);
+    let Ok((status, body)) = http_get_text(&host, port, "/slots", Duration::from_millis(500)) else {
+        return (None, None);
+    };
+    if status != 200 {
+        return (None, None);
+    }
+    let Ok(slots) = serde_json::from_str::<Value>(&body) else {
+        return (None, None);
+    };
+    let mut context_tokens: Option<i64> = None;
+    let mut context_window_tokens: Option<i64> = None;
+    if let Some(items) = slots.as_array() {
+        for slot in items {
+            if let Some(tokens) = slot.get("n_prompt_tokens").and_then(Value::as_i64) {
+                context_tokens = Some(context_tokens.unwrap_or(0).max(tokens));
+            }
+            if let Some(ctx) = slot.get("n_ctx").and_then(Value::as_i64) {
+                context_window_tokens = Some(context_window_tokens.unwrap_or(0).max(ctx));
+            }
+        }
+    }
+    (context_tokens, context_window_tokens)
+}
+
 fn collect_runtime_metrics(config: &Value, previous: Option<RuntimeCounterSample>) -> Option<(Value, RuntimeCounterSample)> {
     let host = string_at(config, &["server", "host"]);
     let port = number_at(config, &["server", "port"], 8099);
@@ -2499,7 +2526,16 @@ fn collect_runtime_metrics(config: &Value, previous: Option<RuntimeCounterSample
         previous.and_then(|sample| sample.prompt_tokens_total),
         previous.map(|sample| sample.observed_at_ms),
     );
-    if generation.is_none() && prompt.is_none() && average_generation.is_none() && average_prompt.is_none() && processing.is_none() && deferred.is_none() {
+    let (context_tokens, context_window_tokens) = collect_runtime_slot_context(config);
+    if generation.is_none()
+        && prompt.is_none()
+        && average_generation.is_none()
+        && average_prompt.is_none()
+        && processing.is_none()
+        && deferred.is_none()
+        && context_tokens.is_none()
+        && context_window_tokens.is_none()
+    {
         return None;
     }
     Some((json!({
@@ -2509,7 +2545,9 @@ fn collect_runtime_metrics(config: &Value, previous: Option<RuntimeCounterSample
         "averageGenerationTokensPerSecond": average_generation,
         "averagePromptTokensPerSecond": average_prompt,
         "requestsProcessing": processing,
-        "requestsDeferred": deferred
+        "requestsDeferred": deferred,
+        "contextTokens": context_tokens,
+        "contextWindowTokens": context_window_tokens
     }), baseline))
 }
 

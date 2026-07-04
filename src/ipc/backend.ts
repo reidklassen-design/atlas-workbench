@@ -77,6 +77,11 @@ interface RuntimeMetricsResult {
   sample: RuntimeCounterSample;
 }
 
+interface RuntimeSlotContext {
+  contextTokens?: number;
+  contextWindowTokens?: number;
+}
+
 function deltaRate(total: number | undefined, observedAtMs: number, previousTotal: number | undefined, previousObservedAtMs: number | undefined): number | undefined {
   if (total === undefined || previousTotal === undefined || previousObservedAtMs === undefined) return undefined;
   const tokenDelta = total - previousTotal;
@@ -90,6 +95,29 @@ function deltaRate(total: number | undefined, observedAtMs: number, previousTota
 function shouldKeepRuntimeBaseline(current: RuntimeCounterSample, previous: RuntimeCounterSample | undefined, requestsProcessing: number | undefined): boolean {
   if (!previous || requestsProcessing !== undefined && requestsProcessing <= 0) return false;
   return current.generationTokensTotal === previous.generationTokensTotal && current.promptTokensTotal === previous.promptTokensTotal;
+}
+
+async function collectRuntimeSlotContext(config: AppConfig): Promise<RuntimeSlotContext> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 500);
+  try {
+    const res = await fetch(`http://${clientHost(config.server.host)}:${config.server.port}/slots`, { signal: controller.signal });
+    if (!res.ok) return {};
+    const slots = await res.json() as Array<Record<string, unknown>>;
+    let contextTokens: number | undefined;
+    let contextWindowTokens: number | undefined;
+    for (const slot of Array.isArray(slots) ? slots : []) {
+      const promptTokens = typeof slot.n_prompt_tokens === "number" ? slot.n_prompt_tokens : undefined;
+      const ctx = typeof slot.n_ctx === "number" ? slot.n_ctx : undefined;
+      if (promptTokens !== undefined) contextTokens = Math.max(contextTokens ?? 0, promptTokens);
+      if (ctx !== undefined) contextWindowTokens = Math.max(contextWindowTokens ?? 0, ctx);
+    }
+    return { contextTokens, contextWindowTokens };
+  } catch {
+    return {};
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function collectRuntimeMetrics(config: AppConfig, previous?: RuntimeCounterSample): Promise<RuntimeMetricsResult | undefined> {
@@ -111,13 +139,16 @@ async function collectRuntimeMetrics(config: AppConfig, previous?: RuntimeCounte
     const averagePromptTokensPerSecond = prometheusMetric(text, "llamacpp:prompt_tokens_seconds");
     const generationTokensPerSecond = deltaRate(sample.generationTokensTotal, sample.observedAtMs, previous?.generationTokensTotal, previous?.observedAtMs);
     const promptTokensPerSecond = deltaRate(sample.promptTokensTotal, sample.observedAtMs, previous?.promptTokensTotal, previous?.observedAtMs);
+    const slotContext = await collectRuntimeSlotContext(config);
     if (
       generationTokensPerSecond === undefined &&
       promptTokensPerSecond === undefined &&
       averageGenerationTokensPerSecond === undefined &&
       averagePromptTokensPerSecond === undefined &&
       requestsProcessing === undefined &&
-      requestsDeferred === undefined
+      requestsDeferred === undefined &&
+      slotContext.contextTokens === undefined &&
+      slotContext.contextWindowTokens === undefined
     ) {
       return undefined;
     }
@@ -130,6 +161,8 @@ async function collectRuntimeMetrics(config: AppConfig, previous?: RuntimeCounte
         averagePromptTokensPerSecond,
         requestsProcessing,
         requestsDeferred,
+        contextTokens: slotContext.contextTokens,
+        contextWindowTokens: slotContext.contextWindowTokens,
       },
       sample: baseline,
     };

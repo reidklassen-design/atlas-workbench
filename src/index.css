@@ -470,6 +470,14 @@
     border-color: rgba(47, 107, 37, 0.55);
     --tw-ring-color: rgba(124, 255, 43, 0.22);
   }
+  select.input {
+    color: #e8fff0;
+    background-color: rgba(7, 19, 13, 0.98);
+  }
+  select.input option {
+    color: #e8fff0;
+    background-color: #07130d;
+  }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-50;
   }

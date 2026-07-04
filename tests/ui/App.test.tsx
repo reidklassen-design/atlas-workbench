@@ -49,8 +49,33 @@ describe("App shell", () => {
     controller.dispose();
   });
 
+  it("keeps dashboard throughput visible from llama.cpp average timing when live delta is idle", async () => {
+    const handlers = baselineHandlers({
+      "monitor.collect": () => ({
+        cpu: { overall: 22, perCore: [20, 24] },
+        ram: { used: 4_000_000_000, total: 16_000_000_000, percent: 25 },
+        gpu: { detected: true, name: "RTX Test", usagePercent: 55, memoryUsed: 8_000_000_000, memoryTotal: 16_000_000_000, temperatureCelsius: 61 },
+        runtime: { source: "llama.cpp", generationTokensPerSecond: 0, averageGenerationTokensPerSecond: 117.2, requestsProcessing: 0, requestsDeferred: 0 },
+        processes: [],
+        ts: Date.now(),
+      }),
+    });
+    const { controller } = await renderApp(<Shell />, handlers);
+
+    expect(screen.getByText(/Tokens\/sec: 117.2 tok\/s/i)).toBeDefined();
+    controller.dispose();
+  });
+
   it("shows live gateway context budget and compaction status in the bottom bar", async () => {
     const handlers = baselineHandlers({
+      "monitor.collect": () => ({
+        cpu: { overall: 22, perCore: [20, 24] },
+        ram: { used: 4_000_000_000, total: 16_000_000_000, percent: 25 },
+        gpu: { detected: true, name: "RTX Test", usagePercent: 55, memoryUsed: 8_000_000_000, memoryTotal: 16_000_000_000, temperatureCelsius: 61 },
+        runtime: { source: "llama.cpp", contextTokens: 35935, contextWindowTokens: 98304, requestsProcessing: 0, requestsDeferred: 0 },
+        processes: [],
+        ts: Date.now(),
+      }),
       "gateway.status": () => ({
         running: true,
         external: false,
@@ -78,7 +103,7 @@ describe("App shell", () => {
     const { controller } = await renderApp(<Shell />, handlers);
 
     expect(screen.getByText("Context Usage")).toBeDefined();
-    expect(screen.getByText(/60,000 \/ 77,824 prompt tokens/i)).toBeDefined();
+    expect(screen.getByText(/35,935 \/ 98,304 prompt tokens/i)).toBeDefined();
     expect(screen.getByText("Compacting now")).toBeDefined();
     expect(screen.getByText("System Status")).toBeDefined();
     expect(screen.getAllByText("Online").length).toBeGreaterThan(0);

@@ -122,18 +122,22 @@ function useRuntimeGraphHistory(metrics: SystemMetrics | null, tokensPerSecond: 
 function useRecentTokensPerSecond(metrics: SystemMetrics | null, fallbackTokensPerSecond: number | null): number | null {
   const [recent, setRecent] = useState<{ value: number; ts: number } | null>(null);
   const liveTokens = finiteNumber(metrics?.runtime?.generationTokensPerSecond);
+  const averageTokens = finiteNumber(metrics?.runtime?.averageGenerationTokensPerSecond);
   const requestsProcessing = finiteNumber(metrics?.runtime?.requestsProcessing);
   const metricTs = metrics?.ts ?? Date.now();
 
   useEffect(() => {
     if (liveTokens !== undefined && liveTokens > 0) {
       setRecent({ value: liveTokens, ts: metricTs });
+    } else if (averageTokens !== undefined && averageTokens > 0) {
+      setRecent({ value: averageTokens, ts: metricTs });
     }
-  }, [liveTokens, metricTs]);
+  }, [liveTokens, averageTokens, metricTs]);
 
   if (liveTokens !== undefined && liveTokens > 0) return liveTokens;
-  if (recent && metricTs - recent.ts <= 12_000 && (liveTokens === 0 || requestsProcessing === undefined || requestsProcessing > 0)) return recent.value;
-  if (liveTokens !== undefined) return liveTokens;
+  if (recent && metricTs - recent.ts <= 30_000) return recent.value;
+  if (averageTokens !== undefined && averageTokens > 0) return averageTokens;
+  if (liveTokens !== undefined && liveTokens > 0 || requestsProcessing !== undefined && requestsProcessing > 0) return liveTokens ?? null;
   return fallbackTokensPerSecond;
 }
 
@@ -365,8 +369,10 @@ function NeoSidebar({ active, onSelect }: { active: TabId; onSelect: (tab: TabId
 function NeoBottomBar({ config, metrics, server, gateway }: { config: AppConfig; metrics: SystemMetrics | null; server: ProcessStatus; gateway: GatewayStatus }): JSX.Element {
   const activeProfile = config.agentRuntime.profiles.find((profile) => profile.id === config.agentRuntime.activeProfileId);
   const contextWindow = Number(activeProfile?.requestPolicy.contextWindowTokens ?? config.serverFlags["ctx-size"] ?? 0);
-  const usableContext = Number(gateway.lastBudget?.usablePromptTokens ?? activeProfile?.requestPolicy.maxPromptTokens ?? contextWindow ?? 0);
-  const usedContext = Number(gateway.lastBudget?.estimatedPromptTokens ?? 0);
+  const liveContextWindow = finiteNumber(metrics?.runtime?.contextWindowTokens);
+  const liveContextTokens = finiteNumber(metrics?.runtime?.contextTokens);
+  const usableContext = Number(liveContextWindow ?? gateway.lastBudget?.usablePromptTokens ?? activeProfile?.requestPolicy.maxPromptTokens ?? contextWindow ?? 0);
+  const usedContext = Number(liveContextTokens ?? gateway.lastBudget?.estimatedPromptTokens ?? 0);
   const pct = usableContext > 0 ? Math.max(0, Math.min(100, (usedContext / usableContext) * 100)) : 0;
   const sessionName = activeProfile?.name ?? formatModelName(config.model.selectedModel);
   const runtimeStatus = gateway.running ? "Gateway online" : server.state === "running" ? "llama.cpp online" : "Runtime idle";

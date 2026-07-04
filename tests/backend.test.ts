@@ -55,11 +55,16 @@ async function httpGet(url: string, timeoutMs = 4000): Promise<{ status: number;
   });
 }
 
-async function startMetricsServer(bodies: string[]): Promise<{ port: number; close: () => Promise<void> } | null> {
+async function startMetricsServer(bodies: string[], slotsBody = JSON.stringify([{ n_prompt_tokens: 35935, n_ctx: 98304 }])): Promise<{ port: number; close: () => Promise<void> } | null> {
   const port = await getFreePort();
   if (port === null) return null;
   let index = 0;
-  const server = createServer((_req, res) => {
+  const server = createServer((req, res) => {
+    if (req.url === "/slots") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(slotsBody);
+      return;
+    }
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end(bodies[Math.min(index, bodies.length - 1)] ?? "");
     index += 1;
@@ -200,6 +205,8 @@ describe("backend config & binary commands", () => {
       expect(active.runtime?.generationTokensPerSecond).toBe(8);
       expect(idle.runtime?.generationTokensPerSecond).toBe(0);
       expect(active.runtime?.averageGenerationTokensPerSecond).toBe(114.7);
+      expect(active.runtime?.contextTokens).toBe(35935);
+      expect(active.runtime?.contextWindowTokens).toBe(98304);
     } finally {
       nowSpy.mockRestore();
       await metricsServer.close();

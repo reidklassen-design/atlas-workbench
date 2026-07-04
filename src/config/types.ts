@@ -199,6 +199,8 @@ export interface RuntimeMetrics {
   averagePromptTokensPerSecond?: number;
   requestsProcessing?: number;
   requestsDeferred?: number;
+  contextTokens?: number;
+  contextWindowTokens?: number;
   source: "llama.cpp";
 }
 

@@ -25,6 +25,19 @@ function flagsForSection(section: FlagSection): FlagDef[] {
   return SERVER_FLAGS.filter((f) => f.section === section && !SERVER_TAB_OWNED.has(f.id));
 }
 
+function searchableFlagText(flag: FlagDef): string {
+  return [
+    flag.id,
+    flag.flag,
+    flag.negatedFlag,
+    flag.label,
+    flag.section,
+    flag.type,
+    flag.help,
+    ...(flag.options ?? []),
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
 export function SettingsTab(): JSX.Element {
   const controller = useAppController();
   const config = useControllerState((c) => c.config);
@@ -33,8 +46,29 @@ export function SettingsTab(): JSX.Element {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [flagDraft, setFlagDraft] = useState<FlagValues>(config.serverFlags);
   const [flagSaveState, setFlagSaveState] = useState<"idle" | "dirty" | "saving" | "saved" | "error">("idle");
+  const [flagSearch, setFlagSearch] = useState("");
+  const [activeSection, setActiveSection] = useState<FlagSection>("Server");
 
   const grouped = useMemo(() => SECTIONS.map((section) => ({ section, flags: flagsForSection(section) })), []);
+  const searchableFlagCount = useMemo(() => grouped.reduce((total, group) => total + group.flags.length, 0), [grouped]);
+  const activeGroup = useMemo(() => grouped.find((group) => group.section === activeSection) ?? grouped[0], [activeSection, grouped]);
+  const filteredGroups = useMemo(() => {
+    const query = flagSearch.trim().toLowerCase();
+    if (!query) return grouped;
+    const terms = query.split(/\s+/).filter(Boolean);
+    return grouped
+      .map(({ section, flags }) => ({
+        section,
+        flags: flags.filter((flag) => {
+          const haystack = searchableFlagText(flag);
+          return terms.every((term) => haystack.includes(term));
+        }),
+      }))
+      .filter(({ flags }) => flags.length > 0);
+  }, [grouped, flagSearch]);
+  const searchActive = flagSearch.trim().length > 0;
+  const visibleGroups = searchActive ? filteredGroups : activeGroup ? [activeGroup] : [];
+  const visibleFlagCount = useMemo(() => visibleGroups.reduce((total, group) => total + group.flags.length, 0), [visibleGroups]);
 
   useEffect(() => {
     setFlagDraft(config.serverFlags);
@@ -115,8 +149,60 @@ export function SettingsTab(): JSX.Element {
         <p className="mb-4 text-xs text-slate-400">
           Advanced llama.cpp server flags are exposed below. Host, port, and GPU layer offload are controlled from the Server tab.
         </p>
+        <div className="mb-4 flex gap-2 overflow-x-auto border-b border-white/10 pb-3" role="tablist" aria-label="Settings sections">
+          {grouped.map(({ section, flags }) => {
+            const active = !searchActive && section === activeSection;
+            return (
+              <button
+                key={section}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className={clsx(
+                  "shrink-0 rounded-md border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition",
+                  active
+                    ? "border-[#7CFF2B]/70 bg-[#102A1B] text-[#E8FFF0] shadow-[0_0_18px_rgba(57,255,20,0.16)]"
+                    : "border-white/10 bg-white/[0.03] text-[#8FA99A] hover:border-[#3D7A32]/70 hover:text-[#E8FFF0]",
+                )}
+                onClick={() => {
+                  setActiveSection(section);
+                  setFlagSearch("");
+                }}
+                data-testid={`settings-section-tab-${section}`}
+              >
+                {section}
+                <span className="ml-2 text-[#7CFF2B]">{flags.length}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mb-4 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <label className="min-w-0 flex-1">
+              <span className="section-kicker">Search All Settings</span>
+              <input
+                type="search"
+                className="input mt-2"
+                value={flagSearch}
+                onChange={(event) => setFlagSearch(event.target.value)}
+                aria-label="Find any setting by name, command, section, option, or help text"
+                data-testid="settings-flag-search"
+              />
+            </label>
+            <div className="flex items-center gap-3 text-xs text-slate-400">
+              <span data-testid="settings-search-count">
+                {searchActive ? `${visibleFlagCount} of ${searchableFlagCount} settings` : `${visibleFlagCount} ${activeSection} settings`}
+              </span>
+              {searchActive ? (
+                <button type="button" className="btn-ghost" onClick={() => setFlagSearch("")} data-testid="settings-search-clear">
+                  Clear search
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
         <div className="space-y-6">
-          {grouped.map(({ section, flags }) => (
+          {visibleGroups.map(({ section, flags }) => (
             <section key={section}>
               <div className="mb-3 flex items-center justify-between border-b border-slate-700/60 pb-2">
                 <h3 className="text-sm font-semibold uppercase tracking-wide text-accent" data-testid={`flag-section-${section}`}>
@@ -138,6 +224,11 @@ export function SettingsTab(): JSX.Element {
               </div>
             </section>
           ))}
+          {searchActive && visibleFlagCount === 0 ? (
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-400" data-testid="settings-search-empty">
+              No settings match “{flagSearch.trim()}”.
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
