@@ -119,6 +119,24 @@ function useRuntimeGraphHistory(metrics: SystemMetrics | null, tokensPerSecond: 
   return history;
 }
 
+function useRecentTokensPerSecond(metrics: SystemMetrics | null, fallbackTokensPerSecond: number | null): number | null {
+  const [recent, setRecent] = useState<{ value: number; ts: number } | null>(null);
+  const liveTokens = finiteNumber(metrics?.runtime?.generationTokensPerSecond);
+  const requestsProcessing = finiteNumber(metrics?.runtime?.requestsProcessing);
+  const metricTs = metrics?.ts ?? Date.now();
+
+  useEffect(() => {
+    if (liveTokens !== undefined && liveTokens > 0) {
+      setRecent({ value: liveTokens, ts: metricTs });
+    }
+  }, [liveTokens, metricTs]);
+
+  if (liveTokens !== undefined && liveTokens > 0) return liveTokens;
+  if (recent && metricTs - recent.ts <= 12_000 && (liveTokens === 0 || requestsProcessing === undefined || requestsProcessing > 0)) return recent.value;
+  if (liveTokens !== undefined) return liveTokens;
+  return fallbackTokensPerSecond;
+}
+
 function statusTone(status: ProcessStatus["state"]): string {
   if (status === "running") return "bg-[#39FF14] shadow-[0_0_16px_rgba(57,255,20,0.8)]";
   if (status === "starting") return "bg-[#FFD166] shadow-[0_0_16px_rgba(255,209,102,0.55)]";
@@ -451,7 +469,7 @@ function DashboardPage(): JSX.Element {
   const gateway = useControllerState((c) => c.gateway);
   const logs = useControllerState((c) => c.serverLogs);
   const fallbackTokensPerSecond = useMemo(() => latestTokensPerSecond(logs), [logs]);
-  const tokensPerSecond = metrics?.runtime?.generationTokensPerSecond ?? fallbackTokensPerSecond;
+  const tokensPerSecond = useRecentTokensPerSecond(metrics, fallbackTokensPerSecond);
   const graphHistory = useRuntimeGraphHistory(metrics, tokensPerSecond);
   const memoryUsed = finiteNumber(metrics?.gpu.memoryUsed);
   const memoryTotal = finiteNumber(metrics?.gpu.memoryTotal);
@@ -488,7 +506,7 @@ function DashboardPage(): JSX.Element {
                 label="TOKENS / SECOND"
                 value={tokensPerSecond === null ? "--" : tokensPerSecond.toFixed(tokensPerSecond % 1 === 0 ? 0 : 1)}
                 unit="tok/s"
-                subtext={tokensPerSecond === null ? "Waiting for generation" : "latest llama.cpp timing"}
+                subtext={tokensPerSecond === null ? "Waiting for generation" : "recent llama.cpp timing"}
                 progress={tokensPerSecond === null ? 0 : Math.min(100, (tokensPerSecond / 120) * 100)}
               />
               <NeoGauge

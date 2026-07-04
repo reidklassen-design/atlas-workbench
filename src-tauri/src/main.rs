@@ -47,9 +47,8 @@ struct ProcSample {
 #[derive(Clone, Copy)]
 struct RuntimeCounterSample {
     generation_tokens_total: Option<f64>,
-    generation_seconds_total: Option<f64>,
     prompt_tokens_total: Option<f64>,
-    prompt_seconds_total: Option<f64>,
+    observed_at_ms: u128,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -2308,14 +2307,16 @@ fn prometheus_metric(text: &str, metric: &str) -> Option<f64> {
     None
 }
 
-fn delta_rate(total: Option<f64>, seconds: Option<f64>, previous_total: Option<f64>, previous_seconds: Option<f64>) -> Option<f64> {
+fn delta_rate(total: Option<f64>, observed_at_ms: u128, previous_total: Option<f64>, previous_observed_at_ms: Option<u128>) -> Option<f64> {
     let total = total?;
-    let seconds = seconds?;
     let previous_total = previous_total?;
-    let previous_seconds = previous_seconds?;
+    let previous_observed_at_ms = previous_observed_at_ms?;
     let token_delta = total - previous_total;
-    let seconds_delta = seconds - previous_seconds;
-    if token_delta < 0.0 || seconds_delta < 0.0 {
+    if observed_at_ms < previous_observed_at_ms {
+        return None;
+    }
+    let seconds_delta = (observed_at_ms - previous_observed_at_ms) as f64 / 1000.0;
+    if token_delta < 0.0 {
         return None;
     }
     if token_delta == 0.0 {
@@ -2327,6 +2328,14 @@ fn delta_rate(total: Option<f64>, seconds: Option<f64>, previous_total: Option<f
     Some(token_delta / seconds_delta)
 }
 
+fn should_keep_runtime_baseline(current: RuntimeCounterSample, previous: Option<RuntimeCounterSample>, requests_processing: Option<f64>) -> bool {
+    if previous.is_none() || requests_processing.is_some_and(|value| value <= 0.0) {
+        return false;
+    }
+    let previous = previous.unwrap();
+    current.generation_tokens_total == previous.generation_tokens_total && current.prompt_tokens_total == previous.prompt_tokens_total
+}
+
 fn collect_runtime_metrics(config: &Value, previous: Option<RuntimeCounterSample>) -> Option<(Value, RuntimeCounterSample)> {
     let host = string_at(config, &["server", "host"]);
     let port = number_at(config, &["server", "port"], 8099);
@@ -2334,28 +2343,28 @@ fn collect_runtime_metrics(config: &Value, previous: Option<RuntimeCounterSample
     if status != 200 {
         return None;
     }
+    let processing = prometheus_metric(&body, "llamacpp:requests_processing");
+    let deferred = prometheus_metric(&body, "llamacpp:requests_deferred");
     let sample = RuntimeCounterSample {
         generation_tokens_total: prometheus_metric(&body, "llamacpp:tokens_predicted_total"),
-        generation_seconds_total: prometheus_metric(&body, "llamacpp:tokens_predicted_seconds_total"),
         prompt_tokens_total: prometheus_metric(&body, "llamacpp:prompt_tokens_total"),
-        prompt_seconds_total: prometheus_metric(&body, "llamacpp:prompt_seconds_total"),
+        observed_at_ms: now(),
     };
+    let baseline = if should_keep_runtime_baseline(sample, previous, processing) { previous.unwrap() } else { sample };
     let average_generation = prometheus_metric(&body, "llamacpp:predicted_tokens_seconds");
     let average_prompt = prometheus_metric(&body, "llamacpp:prompt_tokens_seconds");
     let generation = delta_rate(
         sample.generation_tokens_total,
-        sample.generation_seconds_total,
+        sample.observed_at_ms,
         previous.and_then(|sample| sample.generation_tokens_total),
-        previous.and_then(|sample| sample.generation_seconds_total),
+        previous.map(|sample| sample.observed_at_ms),
     );
     let prompt = delta_rate(
         sample.prompt_tokens_total,
-        sample.prompt_seconds_total,
+        sample.observed_at_ms,
         previous.and_then(|sample| sample.prompt_tokens_total),
-        previous.and_then(|sample| sample.prompt_seconds_total),
+        previous.map(|sample| sample.observed_at_ms),
     );
-    let processing = prometheus_metric(&body, "llamacpp:requests_processing");
-    let deferred = prometheus_metric(&body, "llamacpp:requests_deferred");
     if generation.is_none() && prompt.is_none() && average_generation.is_none() && average_prompt.is_none() && processing.is_none() && deferred.is_none() {
         return None;
     }
@@ -2367,7 +2376,7 @@ fn collect_runtime_metrics(config: &Value, previous: Option<RuntimeCounterSample
         "averagePromptTokensPerSecond": average_prompt,
         "requestsProcessing": processing,
         "requestsDeferred": deferred
-    }), sample))
+    }), baseline))
 }
 
 fn read_process_metrics(state: &State<AppState>, pid: usize, name: &str) -> Value {

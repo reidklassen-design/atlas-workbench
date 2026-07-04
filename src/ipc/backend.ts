@@ -68,9 +68,8 @@ function prometheusMetric(text: string, metric: string): number | undefined {
 
 interface RuntimeCounterSample {
   generationTokensTotal?: number;
-  generationSecondsTotal?: number;
   promptTokensTotal?: number;
-  promptSecondsTotal?: number;
+  observedAtMs: number;
 }
 
 interface RuntimeMetricsResult {
@@ -78,14 +77,19 @@ interface RuntimeMetricsResult {
   sample: RuntimeCounterSample;
 }
 
-function deltaRate(total: number | undefined, seconds: number | undefined, previousTotal: number | undefined, previousSeconds: number | undefined): number | undefined {
-  if (total === undefined || seconds === undefined || previousTotal === undefined || previousSeconds === undefined) return undefined;
+function deltaRate(total: number | undefined, observedAtMs: number, previousTotal: number | undefined, previousObservedAtMs: number | undefined): number | undefined {
+  if (total === undefined || previousTotal === undefined || previousObservedAtMs === undefined) return undefined;
   const tokenDelta = total - previousTotal;
-  const secondsDelta = seconds - previousSeconds;
+  const secondsDelta = (observedAtMs - previousObservedAtMs) / 1000;
   if (tokenDelta < 0 || secondsDelta < 0) return undefined;
   if (tokenDelta === 0) return 0;
   if (secondsDelta <= 0) return undefined;
   return tokenDelta / secondsDelta;
+}
+
+function shouldKeepRuntimeBaseline(current: RuntimeCounterSample, previous: RuntimeCounterSample | undefined, requestsProcessing: number | undefined): boolean {
+  if (!previous || requestsProcessing !== undefined && requestsProcessing <= 0) return false;
+  return current.generationTokensTotal === previous.generationTokensTotal && current.promptTokensTotal === previous.promptTokensTotal;
 }
 
 async function collectRuntimeMetrics(config: AppConfig, previous?: RuntimeCounterSample): Promise<RuntimeMetricsResult | undefined> {
@@ -95,23 +99,18 @@ async function collectRuntimeMetrics(config: AppConfig, previous?: RuntimeCounte
     const res = await fetch(`http://${clientHost(config.server.host)}:${config.server.port}/metrics`, { signal: controller.signal });
     if (!res.ok) return undefined;
     const text = await res.text();
-    const sample: RuntimeCounterSample = {
-      generationTokensTotal: prometheusMetric(text, "llamacpp:tokens_predicted_total"),
-      generationSecondsTotal: prometheusMetric(text, "llamacpp:tokens_predicted_seconds_total"),
-      promptTokensTotal: prometheusMetric(text, "llamacpp:prompt_tokens_total"),
-      promptSecondsTotal: prometheusMetric(text, "llamacpp:prompt_seconds_total"),
-    };
-    const averageGenerationTokensPerSecond = prometheusMetric(text, "llamacpp:predicted_tokens_seconds");
-    const averagePromptTokensPerSecond = prometheusMetric(text, "llamacpp:prompt_tokens_seconds");
-    const generationTokensPerSecond = deltaRate(
-      sample.generationTokensTotal,
-      sample.generationSecondsTotal,
-      previous?.generationTokensTotal,
-      previous?.generationSecondsTotal,
-    );
-    const promptTokensPerSecond = deltaRate(sample.promptTokensTotal, sample.promptSecondsTotal, previous?.promptTokensTotal, previous?.promptSecondsTotal);
     const requestsProcessing = prometheusMetric(text, "llamacpp:requests_processing");
     const requestsDeferred = prometheusMetric(text, "llamacpp:requests_deferred");
+    const sample: RuntimeCounterSample = {
+      generationTokensTotal: prometheusMetric(text, "llamacpp:tokens_predicted_total"),
+      promptTokensTotal: prometheusMetric(text, "llamacpp:prompt_tokens_total"),
+      observedAtMs: Date.now(),
+    };
+    const baseline = previous && shouldKeepRuntimeBaseline(sample, previous, requestsProcessing) ? previous : sample;
+    const averageGenerationTokensPerSecond = prometheusMetric(text, "llamacpp:predicted_tokens_seconds");
+    const averagePromptTokensPerSecond = prometheusMetric(text, "llamacpp:prompt_tokens_seconds");
+    const generationTokensPerSecond = deltaRate(sample.generationTokensTotal, sample.observedAtMs, previous?.generationTokensTotal, previous?.observedAtMs);
+    const promptTokensPerSecond = deltaRate(sample.promptTokensTotal, sample.observedAtMs, previous?.promptTokensTotal, previous?.observedAtMs);
     if (
       generationTokensPerSecond === undefined &&
       promptTokensPerSecond === undefined &&
@@ -132,7 +131,7 @@ async function collectRuntimeMetrics(config: AppConfig, previous?: RuntimeCounte
         requestsProcessing,
         requestsDeferred,
       },
-      sample,
+      sample: baseline,
     };
   } catch {
     return undefined;

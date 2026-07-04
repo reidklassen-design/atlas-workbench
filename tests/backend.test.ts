@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { createServer, type Server, get as httpGetRaw } from "node:http";
 import { existsSync } from "node:fs";
 import { Backend, CommandError } from "@/ipc/backend";
@@ -158,7 +158,7 @@ describe("backend config & binary commands", () => {
         "llamacpp:prompt_seconds_total 5",
         "llamacpp:predicted_tokens_seconds 114.7",
         "llamacpp:prompt_tokens_seconds 1200",
-        "llamacpp:requests_processing 0",
+        "llamacpp:requests_processing 1",
         "llamacpp:requests_deferred 0",
       ].join("\n"),
       [
@@ -171,22 +171,37 @@ describe("backend config & binary commands", () => {
         "llamacpp:requests_processing 1",
         "llamacpp:requests_deferred 0",
       ].join("\n"),
+      [
+        "llamacpp:tokens_predicted_total 140",
+        "llamacpp:tokens_predicted_seconds_total 12",
+        "llamacpp:prompt_tokens_total 50",
+        "llamacpp:prompt_seconds_total 5",
+        "llamacpp:predicted_tokens_seconds 114.7",
+        "llamacpp:prompt_tokens_seconds 1200",
+        "llamacpp:requests_processing 0",
+        "llamacpp:requests_deferred 0",
+      ].join("\n"),
     ]);
     if (metricsServer === null) return;
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValueOnce(1000).mockReturnValueOnce(2000).mockReturnValueOnce(6000).mockReturnValueOnce(7000);
     try {
       const h = await withFakeBinary({ server: { host: "127.0.0.1", port: metricsServer.port } });
       harnesses.push(h);
 
       const first = (await h.backend.handle("monitor.collect", { pids: [] })) as SystemMetrics;
-      const idle = (await h.backend.handle("monitor.collect", { pids: [] })) as SystemMetrics;
+      const activePending = (await h.backend.handle("monitor.collect", { pids: [] })) as SystemMetrics;
       const active = (await h.backend.handle("monitor.collect", { pids: [] })) as SystemMetrics;
+      const idle = (await h.backend.handle("monitor.collect", { pids: [] })) as SystemMetrics;
 
       expect(first.runtime?.averageGenerationTokensPerSecond).toBe(114.7);
       expect(first.runtime?.generationTokensPerSecond).toBeUndefined();
+      expect(activePending.runtime?.generationTokensPerSecond).toBe(0);
+      expect(active.runtime?.generationTokensPerSecond).toBe(8);
       expect(idle.runtime?.generationTokensPerSecond).toBe(0);
-      expect(active.runtime?.generationTokensPerSecond).toBe(20);
       expect(active.runtime?.averageGenerationTokensPerSecond).toBe(114.7);
     } finally {
+      nowSpy.mockRestore();
       await metricsServer.close();
     }
   });
