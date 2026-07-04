@@ -17,14 +17,19 @@ describe("configStore", () => {
   it("returns defaults when no config file exists", async () => {
     const store = createConfigStore(join(dir, "config.json"));
     const config = await store.load();
-    expect(config.server.host).toBe("127.0.0.1");
-    expect(config.server.port).toBe(8080);
-    expect(config.binaryPaths.server).toBe("");
-    expect(config.serverFlags["ctx-size"]).toBe(131072);
+    expect(config.server.host).toBe("0.0.0.0");
+    expect(config.server.port).toBe(8099);
+    expect(config.binaryPaths.server).toBe("/home/reid/.local/bin/llama-server");
+    expect(config.model.selectedModel).toContain("ornith-1.0-35b-Q4_K_M.gguf");
+    expect(config.serverFlags.alias).toBe("Ornith1");
+    expect(config.serverFlags["ctx-size"]).toBe(125000);
     expect(config.serverFlags["flash-attn"]).toBe("on");
     expect(config.serverFlags["cache-type-k"]).toBe("q8_0");
     expect(config.serverFlags["cache-type-v"]).toBe("q8_0");
     expect(config.gpu.offloadMode).toBe("auto");
+    expect(config.agentRuntime.activeProfileId).toBe("3090-ti-ornith-35b-125k-stable");
+    expect(config.agentRuntime.gateway.port).toBe(18080);
+    expect(config.agentRuntime.profiles.some((profile) => profile.id === "compression-sidecar")).toBe(true);
   });
 
   it("round-trips a saved config", async () => {
@@ -80,6 +85,8 @@ describe("configStore", () => {
     expect(merged.gpu.offloadMode).toBe("auto");
     expect(merged.server.host).toBe("1.2.3.4");
     expect(merged.binaryPaths.server).toBe("/x/server");
+    expect(merged.agentRuntime.activeProfileId).toBe("3090-ti-ornith-35b-125k-stable");
+    expect(merged.agentRuntime.profiles.length).toBeGreaterThan(0);
   });
 
   it("corrupted config falls back to defaults instead of crashing", async () => {
@@ -87,7 +94,7 @@ describe("configStore", () => {
     const { promises: fs } = await import("node:fs");
     await fs.writeFile(path, "{ not valid json", "utf8");
     const config = await createConfigStore(path).load();
-    expect(config.server.host).toBe("127.0.0.1");
+    expect(config.server.host).toBe("0.0.0.0");
   });
 
   it("every catalog flag has a default in defaultServerFlags", () => {

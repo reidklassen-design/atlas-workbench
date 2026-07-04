@@ -1,17 +1,22 @@
 import { defaultFinetuneParams, defaultServerFlags } from "./flagCatalog";
 import type { AppConfig } from "./types";
+import { defaultAgentRuntimeConfig } from "@/runtime/profiles";
 
 export const CONFIG_SCHEMA_VERSION = 1;
 
 export function defaultConfig(): AppConfig {
   return {
     schemaVersion: CONFIG_SCHEMA_VERSION,
-    binaryPaths: { server: "", finetune: "" },
-    gpu: { autoOffloadInitialized: false, optimizedProfileVersion: 0, offloadMode: "auto" },
-    model: { directory: "", selectedModel: "" },
-    server: { host: "127.0.0.1", port: 8080 },
+    binaryPaths: { server: "/home/reid/.local/bin/llama-server", finetune: "/home/reid/.local/bin/llama-finetune" },
+    gpu: { autoOffloadInitialized: false, optimizedProfileVersion: 2, offloadMode: "auto" },
+    model: {
+      directory: "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF",
+      selectedModel: "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF/ornith-1.0-35b-Q4_K_M.gguf",
+    },
+    server: { host: "0.0.0.0", port: 8099 },
     serverFlags: defaultServerFlags(),
     finetune: defaultFinetuneParams(),
+    agentRuntime: defaultAgentRuntimeConfig(),
   };
 }
 
@@ -61,6 +66,24 @@ export function mergeConfigs(saved: Partial<AppConfig>, base: AppConfig = defaul
       if (def === undefined) continue;
       if (typeof value === typeof def) merged.finetune[key] = value;
     }
+  }
+  if (saved.agentRuntime && typeof saved.agentRuntime === "object") {
+    merged.agentRuntime = {
+      ...base.agentRuntime,
+      activeProfileId: typeof saved.agentRuntime.activeProfileId === "string" ? saved.agentRuntime.activeProfileId : base.agentRuntime.activeProfileId,
+      gateway:
+        saved.agentRuntime.gateway && typeof saved.agentRuntime.gateway === "object"
+          ? {
+              ...base.agentRuntime.gateway,
+              enabled: typeof saved.agentRuntime.gateway.enabled === "boolean" ? saved.agentRuntime.gateway.enabled : base.agentRuntime.gateway.enabled,
+              host: typeof saved.agentRuntime.gateway.host === "string" ? saved.agentRuntime.gateway.host : base.agentRuntime.gateway.host,
+              port: typeof saved.agentRuntime.gateway.port === "number" ? saved.agentRuntime.gateway.port : base.agentRuntime.gateway.port,
+              apiKey: typeof saved.agentRuntime.gateway.apiKey === "string" ? saved.agentRuntime.gateway.apiKey : base.agentRuntime.gateway.apiKey,
+              modelAlias: typeof saved.agentRuntime.gateway.modelAlias === "string" ? saved.agentRuntime.gateway.modelAlias : base.agentRuntime.gateway.modelAlias,
+            }
+          : base.agentRuntime.gateway,
+      profiles: Array.isArray(saved.agentRuntime.profiles) && saved.agentRuntime.profiles.length > 0 ? saved.agentRuntime.profiles : base.agentRuntime.profiles,
+    };
   }
   return merged;
 }

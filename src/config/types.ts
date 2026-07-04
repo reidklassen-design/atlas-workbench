@@ -70,6 +70,49 @@ export interface GpuConfig {
 export type FlagValues = Record<string, string | number | boolean>;
 export type FinetuneValues = Record<string, string | number | boolean>;
 
+export type AgentRuntimeRole = "main-coding" | "compression" | "embedding" | "reranker" | "rescue";
+export type OverloadBehavior = "reject" | "compress" | "retrieve";
+
+export interface AgentRequestPolicy {
+  contextWindowTokens: number;
+  reservedOutputTokens: number;
+  reservedSystemTokens: number;
+  safetyMarginTokens: number;
+  maxPromptTokens: number;
+  maxOutputTokens: number;
+  maxSingleFileTokens: number;
+  maxLogTokens: number;
+  requestTimeoutMs: number;
+  streamStallTimeoutMs: number;
+  overloadBehavior: OverloadBehavior;
+}
+
+export interface AgentGatewayConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  apiKey: string;
+  modelAlias: string;
+}
+
+export interface AgentRuntimeProfile {
+  id: string;
+  name: string;
+  role: AgentRuntimeRole;
+  description: string;
+  modelPath?: string;
+  modelDirectory?: string;
+  serverFlagOverrides: FlagValues;
+  gpuOffloadMode?: GpuOffloadMode;
+  requestPolicy: AgentRequestPolicy;
+}
+
+export interface AgentRuntimeConfig {
+  activeProfileId: string;
+  gateway: AgentGatewayConfig;
+  profiles: AgentRuntimeProfile[];
+}
+
 export interface AppConfig {
   schemaVersion: number;
   binaryPaths: BinaryPaths;
@@ -78,6 +121,7 @@ export interface AppConfig {
   server: ServerEndpoint;
   serverFlags: FlagValues;
   finetune: FinetuneValues;
+  agentRuntime: AgentRuntimeConfig;
 }
 
 export interface ProcessLogLine {
@@ -143,4 +187,40 @@ export interface SystemMetrics {
   gpu: GpuMetrics;
   processes: ProcessResource[];
   ts: number;
+}
+
+export type RuntimeHealthState = "healthy" | "degraded" | "unreachable";
+
+export interface RuntimeHealthProbeResult {
+  state: RuntimeHealthState;
+  endpoint: string;
+  checkedAt: number;
+  latencyMs: number;
+  healthOk: boolean;
+  modelsOk: boolean;
+  slotsOk?: boolean;
+  modelIds: string[];
+  reason: string;
+}
+
+export interface GatewayStatus {
+  running: boolean;
+  host: string;
+  port: number;
+  upstream: string;
+  modelAlias: string;
+  activeProfileId: string;
+  startedAt?: number;
+  requestCount: number;
+  rejectedCount: number;
+  lastError?: string;
+  lastBudget?: {
+    ok: boolean;
+    estimatedPromptTokens: number;
+    requestedOutputTokens: number;
+    usablePromptTokens: number;
+    overflowTokens: number;
+    action: "forward" | "reject" | "compress" | "retrieve";
+    reasons: string[];
+  };
 }

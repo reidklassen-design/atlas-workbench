@@ -9,7 +9,8 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{mpsc, Arc, Mutex},
+    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::System;
@@ -19,12 +20,21 @@ use uuid::Uuid;
 const SERVER_READY_TIMEOUT_SECS: u64 = 600;
 const HEALTH_PROGRESS_LOG_SECS: u64 = 5;
 const PROCESS_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+const OPTIMIZED_PROFILE_VERSION: i64 = 2;
 
 #[derive(Default)]
 struct AppState {
     children: Arc<Mutex<HashMap<String, Child>>>,
     log_tails: Arc<Mutex<HashMap<String, Vec<String>>>>,
     proc_samples: Mutex<HashMap<usize, ProcSample>>,
+    gateway: Arc<Mutex<Option<GatewayRuntime>>>,
+}
+
+struct GatewayRuntime {
+    shutdown: mpsc::Sender<()>,
+    started_at: u128,
+    host: String,
+    port: i64,
 }
 
 #[derive(Clone, Copy)]
@@ -90,17 +100,27 @@ fn config_path() -> Result<PathBuf, AppError> {
 fn default_config() -> Value {
     json!({
         "schemaVersion": 1,
-        "binaryPaths": { "server": "", "finetune": "" },
-        "gpu": { "autoOffloadInitialized": false, "optimizedProfileVersion": 0, "offloadMode": "auto" },
-        "model": { "directory": "", "selectedModel": "" },
-        "server": { "host": "127.0.0.1", "port": 8080 },
+        "binaryPaths": { "server": "/home/reid/.local/bin/llama-server", "finetune": "/home/reid/.local/bin/llama-finetune" },
+        "gpu": { "autoOffloadInitialized": false, "optimizedProfileVersion": OPTIMIZED_PROFILE_VERSION, "offloadMode": "auto" },
+        "model": {
+            "directory": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF",
+            "selectedModel": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF/ornith-1.0-35b-Q4_K_M.gguf"
+        },
+        "server": { "host": "0.0.0.0", "port": 8099 },
         "serverFlags": {
-            "ctx-size": 131072,
+            "alias": "Ornith1",
+            "ctx-size": 125000,
             "n-gpu-layers": 999,
             "threads": 16,
             "threads-batch": 16,
-            "batch-size": 2048,
-            "ubatch-size": 512,
+            "batch-size": 1024,
+            "ubatch-size": 256,
+            "parallel": 1,
+            "cont-batching": true,
+            "slots": true,
+            "metrics": true,
+            "context-shift": true,
+            "predict": 8192,
             "temp": 0.8,
             "top-k": 40,
             "top-p": 0.95,
@@ -127,7 +147,196 @@ fn default_config() -> Value {
             "optimizer": "adam",
             "use-gpu": false,
             "save-every": 10
+        },
+        "agentRuntime": default_agent_runtime_config()
+    })
+}
+
+fn agent_request_policy(
+    context_window_tokens: i64,
+    reserved_output_tokens: i64,
+    max_single_file_tokens: i64,
+    max_log_tokens: i64,
+    overload_behavior: &str,
+) -> Value {
+    let reserved_system_tokens = 4096;
+    let safety_margin_tokens = 8192;
+    let max_prompt_tokens = (context_window_tokens - reserved_output_tokens - reserved_system_tokens - safety_margin_tokens).max(1024);
+    json!({
+        "contextWindowTokens": context_window_tokens,
+        "reservedOutputTokens": reserved_output_tokens,
+        "reservedSystemTokens": reserved_system_tokens,
+        "safetyMarginTokens": safety_margin_tokens,
+        "maxPromptTokens": max_prompt_tokens,
+        "maxOutputTokens": reserved_output_tokens,
+        "maxSingleFileTokens": max_single_file_tokens,
+        "maxLogTokens": max_log_tokens,
+        "requestTimeoutMs": 20 * 60 * 1000,
+        "streamStallTimeoutMs": 90 * 1000,
+        "overloadBehavior": overload_behavior
+    })
+}
+
+fn profile_flags(overrides: Value) -> Value {
+    let mut flags = json!({
+        "alias": "Ornith1",
+        "ctx-size": 125000,
+        "n-gpu-layers": 999,
+        "threads": 16,
+        "threads-batch": 16,
+        "batch-size": 1024,
+        "ubatch-size": 256,
+        "parallel": 1,
+        "flash-attn": "on",
+        "cache-type-k": "q8_0",
+        "cache-type-v": "q8_0",
+        "cont-batching": true,
+        "slots": true,
+        "metrics": true,
+        "context-shift": true,
+        "predict": 8192
+    });
+    merge_value(&mut flags, overrides);
+    flags
+}
+
+fn default_agent_runtime_profiles() -> Value {
+    json!([
+        {
+            "id": "3090-ti-ornith-35b-125k-stable",
+            "name": "3090 Ti Ornith 35B 125K Stable",
+            "role": "main-coding",
+            "description": "Stable long-context coding profile for the loaded Ornith 35B Q4 model on this RTX 3090 Ti box.",
+            "modelDirectory": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF",
+            "modelPath": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF/ornith-1.0-35b-Q4_K_M.gguf",
+            "gpuOffloadMode": "auto",
+            "serverFlagOverrides": profile_flags(json!({
+                "alias": "Ornith1",
+                "ctx-size": 125000,
+                "parallel": 1,
+                "batch-size": 1024,
+                "ubatch-size": 256,
+                "flash-attn": "on",
+                "cache-type-k": "q8_0",
+                "cache-type-v": "q8_0",
+                "cont-batching": true,
+                "slots": true,
+                "metrics": true,
+                "context-shift": true,
+                "predict": 8192,
+                "threads": 16,
+                "threads-batch": 16
+            })),
+            "requestPolicy": agent_request_policy(125000, 8192, 24000, 12000, "reject")
+        },
+        {
+            "id": "3090-ti-qwen-3-6-27b-96k-coder",
+            "name": "3090 Ti Qwen 3.6 27B 96K Coder",
+            "role": "main-coding",
+            "description": "Second-choice serious coding model with more VRAM headroom than Ornith 35B while keeping large-codebase context.",
+            "modelDirectory": "/home/reid/Downloads",
+            "modelPath": "/home/reid/Downloads/Qwen3.6-27B-Q4_K_M.gguf",
+            "gpuOffloadMode": "auto",
+            "serverFlagOverrides": profile_flags(json!({
+                "alias": "Qwen3.6-27B",
+                "ctx-size": 98304,
+                "parallel": 1,
+                "batch-size": 1024,
+                "ubatch-size": 256,
+                "flash-attn": "on",
+                "cache-type-k": "q8_0",
+                "cache-type-v": "q8_0",
+                "cont-batching": true,
+                "slots": true,
+                "metrics": true,
+                "context-shift": true,
+                "predict": 8192
+            })),
+            "requestPolicy": agent_request_policy(98304, 8192, 18000, 12000, "reject")
+        },
+        {
+            "id": "3090-ti-ornith-9b-64k-fast",
+            "name": "3090 Ti Ornith 9B 64K Fast",
+            "role": "main-coding",
+            "description": "Fast fallback for simple edits, routing, and cheap iteration when the 35B model is unnecessary.",
+            "modelDirectory": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith 1.0 9b",
+            "modelPath": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith 1.0 9b/ornith-1.0-9b-Q8_0.gguf",
+            "gpuOffloadMode": "auto",
+            "serverFlagOverrides": profile_flags(json!({
+                "alias": "Ornith1-9B",
+                "ctx-size": 65536,
+                "parallel": 1,
+                "batch-size": 1024,
+                "ubatch-size": 256,
+                "flash-attn": "on",
+                "cache-type-k": "q8_0",
+                "cache-type-v": "q8_0",
+                "cont-batching": true,
+                "slots": true,
+                "metrics": true,
+                "context-shift": true,
+                "predict": 8192
+            })),
+            "requestPolicy": agent_request_policy(65536, 8192, 16000, 12000, "reject")
+        },
+        {
+            "id": "compression-sidecar",
+            "name": "Compression Sidecar",
+            "role": "compression",
+            "description": "Small-model profile for summarizing old context, logs, and oversized files before the main coder sees them.",
+            "modelDirectory": "/home/reid/Downloads",
+            "modelPath": "/home/reid/Downloads/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+            "gpuOffloadMode": "cpu",
+            "serverFlagOverrides": profile_flags(json!({
+                "ctx-size": 32768,
+                "parallel": 1,
+                "batch-size": 256,
+                "ubatch-size": 64,
+                "flash-attn": "on",
+                "cache-type-k": "q4_0",
+                "cache-type-v": "q4_0",
+                "n-gpu-layers": 0,
+                "metrics": true,
+                "threads": 8,
+                "threads-batch": 8,
+                "predict": 4096
+            })),
+            "requestPolicy": agent_request_policy(32768, 4096, 20000, 24000, "compress")
+        },
+        {
+            "id": "rescue-low-vram",
+            "name": "Rescue Low VRAM",
+            "role": "rescue",
+            "description": "Fallback profile for recovering after VRAM pressure, repeated stalls, or driver instability.",
+            "gpuOffloadMode": "auto",
+            "serverFlagOverrides": profile_flags(json!({
+                "ctx-size": 32768,
+                "parallel": 1,
+                "batch-size": 256,
+                "ubatch-size": 64,
+                "flash-attn": "on",
+                "cache-type-k": "q4_0",
+                "cache-type-v": "q4_0",
+                "metrics": true,
+                "slots": true,
+                "predict": 4096
+            })),
+            "requestPolicy": agent_request_policy(32768, 4096, 12000, 8000, "reject")
         }
+    ])
+}
+
+fn default_agent_runtime_config() -> Value {
+    json!({
+        "activeProfileId": "3090-ti-ornith-35b-125k-stable",
+        "gateway": {
+            "enabled": false,
+            "host": "127.0.0.1",
+            "port": 18080,
+            "apiKey": "atlas-local",
+            "modelAlias": "atlas/3090-ti-ornith-35b-125k-stable"
+        },
+        "profiles": default_agent_runtime_profiles()
     })
 }
 
@@ -165,7 +374,8 @@ fn load_config_value() -> Result<Value, AppError> {
     let profile_version = value_at(&config, &["gpu", "optimizedProfileVersion"]).and_then(Value::as_i64).unwrap_or(0);
     if profile_version < 1 && collect_gpu().get("detected").and_then(Value::as_bool).unwrap_or(false) {
         if let Some(flags) = config.get_mut("serverFlags").and_then(Value::as_object_mut) {
-            flags.insert("ctx-size".to_string(), json!(131072));
+            flags.insert("alias".to_string(), json!("Ornith1"));
+            flags.insert("ctx-size".to_string(), json!(125000));
             flags.insert("n-gpu-layers".to_string(), json!(999));
             flags.insert("flash-attn".to_string(), json!("on"));
             flags.insert("cache-type-k".to_string(), json!("q8_0"));
@@ -173,10 +383,50 @@ fn load_config_value() -> Result<Value, AppError> {
             flags.insert("threads".to_string(), json!(16));
             flags.insert("threads-batch".to_string(), json!(16));
             flags.insert("parallel".to_string(), json!(1));
+            flags.insert("batch-size".to_string(), json!(1024));
+            flags.insert("ubatch-size".to_string(), json!(256));
+            flags.insert("cont-batching".to_string(), json!(true));
+            flags.insert("slots".to_string(), json!(true));
+            flags.insert("metrics".to_string(), json!(true));
+            flags.insert("context-shift".to_string(), json!(true));
+            flags.insert("predict".to_string(), json!(8192));
         }
         if let Some(gpu) = config.get_mut("gpu").and_then(Value::as_object_mut) {
             gpu.insert("optimizedProfileVersion".to_string(), json!(1));
             gpu.entry("offloadMode".to_string()).or_insert_with(|| json!("auto"));
+        }
+        save_config_value(&config)?;
+    }
+    let profile_version = value_at(&config, &["gpu", "optimizedProfileVersion"]).and_then(Value::as_i64).unwrap_or(0);
+    if profile_version < OPTIMIZED_PROFILE_VERSION && collect_gpu().get("detected").and_then(Value::as_bool).unwrap_or(false) {
+        if let Some(flags) = config.get_mut("serverFlags").and_then(Value::as_object_mut) {
+            flags.insert("alias".to_string(), json!("Ornith1"));
+            flags.insert("ctx-size".to_string(), json!(125000));
+            flags.insert("n-gpu-layers".to_string(), json!(999));
+            flags.insert("flash-attn".to_string(), json!("on"));
+            flags.insert("cache-type-k".to_string(), json!("q8_0"));
+            flags.insert("cache-type-v".to_string(), json!("q8_0"));
+            flags.insert("threads".to_string(), json!(16));
+            flags.insert("threads-batch".to_string(), json!(16));
+            flags.insert("parallel".to_string(), json!(1));
+            flags.insert("batch-size".to_string(), json!(1024));
+            flags.insert("ubatch-size".to_string(), json!(256));
+            flags.insert("cont-batching".to_string(), json!(true));
+            flags.insert("slots".to_string(), json!(true));
+            flags.insert("metrics".to_string(), json!(true));
+            flags.insert("context-shift".to_string(), json!(true));
+            flags.insert("predict".to_string(), json!(8192));
+        }
+        if let Some(runtime) = config.get_mut("agentRuntime").and_then(Value::as_object_mut) {
+            runtime.insert("activeProfileId".to_string(), json!("3090-ti-ornith-35b-125k-stable"));
+            runtime.insert("profiles".to_string(), default_agent_runtime_profiles());
+            if let Some(gateway) = runtime.get_mut("gateway").and_then(Value::as_object_mut) {
+                gateway.insert("modelAlias".to_string(), json!("atlas/3090-ti-ornith-35b-125k-stable"));
+            }
+        }
+        if let Some(gpu) = config.get_mut("gpu").and_then(Value::as_object_mut) {
+            gpu.insert("optimizedProfileVersion".to_string(), json!(OPTIMIZED_PROFILE_VERSION));
+            gpu.insert("offloadMode".to_string(), json!("auto"));
         }
         save_config_value(&config)?;
     }
@@ -425,16 +675,17 @@ fn push_gpu_layer_arg(args: &mut Vec<String>, config: &Value, value: &Value) {
 }
 
 fn always_emit_server_flag(id: &str) -> bool {
-    matches!(id, "parallel" | "n-gpu-layers" | "flash-attn" | "ctx-size" | "threads" | "threads-batch" | "cache-type-k" | "cache-type-v")
+    matches!(id, "alias" | "parallel" | "n-gpu-layers" | "flash-attn" | "ctx-size" | "batch-size" | "ubatch-size" | "threads" | "threads-batch" | "predict" | "cache-type-k" | "cache-type-v" | "metrics")
 }
 
 fn server_default_value(id: &str) -> Option<Value> {
     Some(match id {
         "api-key" | "device" | "tensor-split" | "path" | "draft-model" | "logit-bias" | "chat-template" | "chat-template-file" | "grammar" | "grammar-file" | "lora" | "lora-scaled" | "control-vector" | "ssl-key-file" | "ssl-cert-file" | "override-tensor" => json!(""),
-        "alias" => json!("unknown"),
+        "alias" => json!("Ornith1"),
         "parallel" => json!(1),
         "cont-batching" | "slots" | "webui" | "log-prefix" | "warmup" => json!(true),
-        "metrics" | "mlock" | "no-mmap" | "no-perf" | "context-shift" | "ignore-eos" | "embedding" | "reranking" => json!(false),
+        "metrics" | "context-shift" => json!(true),
+        "mlock" | "no-mmap" | "no-perf" | "ignore-eos" | "embedding" | "reranking" => json!(false),
         "n-gpu-layers" => json!(999),
         "split-mode" => json!("layer"),
         "main-gpu" => json!(0),
@@ -443,12 +694,13 @@ fn server_default_value(id: &str) -> Option<Value> {
         "draft-max" => json!(16),
         "draft-min" => json!(5),
         "draft-p-min" => json!(0.9),
-        "ctx-size" => json!(131072),
-        "batch-size" => json!(2048),
-        "ubatch-size" => json!(512),
+        "ctx-size" => json!(125000),
+        "batch-size" => json!(1024),
+        "ubatch-size" => json!(256),
         "keep" => json!(0),
         "threads" | "threads-batch" => json!(16),
-        "predict" | "top-nsigma" | "reasoning-budget" | "embd-normalize" => json!(-1),
+        "predict" => json!(8192),
+        "top-nsigma" | "reasoning-budget" | "embd-normalize" => json!(-1),
         "cache-type-k" | "cache-type-v" => json!("q8_0"),
         "defrag-thold" => json!(0.1),
         "cache-reuse" => json!(0),
@@ -1227,6 +1479,434 @@ fn model_list(directory: String) -> Result<Value, AppError> {
     Ok(json!({ "directory": directory, "files": files, "message": message }))
 }
 
+fn find_runtime_profile(config: &Value, profile_id: &str) -> Option<Value> {
+    value_at(config, &["agentRuntime", "profiles"])
+        .and_then(Value::as_array)
+        .and_then(|profiles| profiles.iter().find(|profile| profile.get("id").and_then(Value::as_str) == Some(profile_id)))
+        .cloned()
+}
+
+#[tauri::command]
+fn runtime_profiles() -> Result<Value, AppError> {
+    let config = load_config_value()?;
+    Ok(value_at(&config, &["agentRuntime", "profiles"]).cloned().unwrap_or_else(default_agent_runtime_profiles))
+}
+
+#[tauri::command]
+fn runtime_apply_profile(profile_id: String) -> Result<Value, AppError> {
+    let mut config = load_config_value()?;
+    let active = string_at(&config, &["agentRuntime", "activeProfileId"]);
+    let requested = if profile_id.trim().is_empty() { active.as_str() } else { profile_id.trim() };
+    let profile = find_runtime_profile(&config, requested)
+        .or_else(|| find_runtime_profile(&config, "3090-ti-ornith-35b-125k-stable"))
+        .ok_or_else(|| app_error("agent-runtime", "Runtime profile unavailable", "Atlas could not find a usable agent runtime profile.", "Reset config or reinstall Atlas Workbench."))?;
+    let resolved_id = profile.get("id").and_then(Value::as_str).unwrap_or("3090-ti-ornith-35b-125k-stable").to_string();
+
+    if let Some(flags) = profile.get("serverFlagOverrides").and_then(Value::as_object) {
+        let target = config.get_mut("serverFlags").and_then(Value::as_object_mut)
+            .ok_or_else(|| app_error("agent-runtime", "Server flags unavailable", "Atlas config is missing serverFlags.", "Reset config and try again."))?;
+        for (key, value) in flags {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some(model_path) = profile.get("modelPath").and_then(Value::as_str) {
+        let model_directory = profile
+            .get("modelDirectory")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| Path::new(model_path).parent().map(|p| p.to_string_lossy().to_string()))
+            .unwrap_or_default();
+        if let Some(model) = config.get_mut("model").and_then(Value::as_object_mut) {
+            model.insert("selectedModel".to_string(), json!(model_path));
+            model.insert("directory".to_string(), json!(model_directory));
+        }
+    }
+    if let Some(mode) = profile.get("gpuOffloadMode").and_then(Value::as_str) {
+        if let Some(gpu) = config.get_mut("gpu").and_then(Value::as_object_mut) {
+            gpu.insert("offloadMode".to_string(), json!(mode));
+        }
+    }
+    if let Some(runtime) = config.get_mut("agentRuntime").and_then(Value::as_object_mut) {
+        runtime.insert("activeProfileId".to_string(), json!(resolved_id.clone()));
+        if let Some(gateway) = runtime.get_mut("gateway").and_then(Value::as_object_mut) {
+            gateway.insert("modelAlias".to_string(), json!(format!("atlas/{}", resolved_id)));
+        }
+    }
+    save_config_value(&config)?;
+    load_config_value()
+}
+
+fn http_get_text(host: &str, port: i64, path: &str, timeout: Duration) -> Result<(u16, String), String> {
+    let client_host = client_host_for(host);
+    let addr = format!("{}:{}", client_host, port);
+    let mut addrs = addr.to_socket_addrs().map_err(|e| e.to_string())?;
+    let socket = addrs.next().ok_or_else(|| format!("Could not resolve {}", addr))?;
+    let mut stream = TcpStream::connect_timeout(&socket, timeout).map_err(|e| e.to_string())?;
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    let request = format!("GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", path, client_host);
+    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).map_err(|e| e.to_string())?;
+    let mut parts = raw.splitn(2, "\r\n\r\n");
+    let headers = parts.next().unwrap_or_default();
+    let body = parts.next().unwrap_or_default().to_string();
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .unwrap_or(0);
+    Ok((status, body))
+}
+
+fn client_host_for(host: &str) -> String {
+    match host.trim() {
+        "" | "0.0.0.0" | "::" | "*" => "127.0.0.1".to_string(),
+        other => other.trim_matches(&['[', ']'][..]).to_string(),
+    }
+}
+
+fn estimate_tokens(text: &str) -> i64 {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    let wordish = trimmed.split_whitespace().count() as i64;
+    let char_estimate = ((trimmed.len() as f64) / 4.0).ceil() as i64;
+    wordish.max(char_estimate)
+}
+
+fn text_from_json(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Array(items) => items.iter().map(text_from_json).collect::<Vec<_>>().join("\n"),
+        Value::Object(map) => {
+            if let Some(Value::String(text)) = map.get("text") {
+                text.clone()
+            } else if let Some(Value::String(content)) = map.get("content") {
+                content.clone()
+            } else {
+                map.values().map(text_from_json).collect::<Vec<_>>().join("\n")
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn estimate_openai_prompt_tokens(body: &Value) -> i64 {
+    let mut text = String::new();
+    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+        for message in messages {
+            if let Some(content) = message.get("content") {
+                text.push_str(&text_from_json(content));
+                text.push('\n');
+            }
+        }
+    }
+    if let Some(prompt) = body.get("prompt").and_then(Value::as_str) {
+        text.push_str(prompt);
+    }
+    estimate_tokens(&text)
+}
+
+fn active_profile(config: &Value) -> Option<Value> {
+    let id = string_at(config, &["agentRuntime", "activeProfileId"]);
+    find_runtime_profile(config, &id).or_else(|| find_runtime_profile(config, "3090-ti-ornith-35b-125k-stable"))
+}
+
+fn active_max_prompt_tokens(config: &Value) -> i64 {
+    active_profile(config)
+        .and_then(|profile| profile.get("requestPolicy").and_then(|policy| policy.get("maxPromptTokens")).and_then(Value::as_i64).or(Some(104520)))
+        .unwrap_or(104520)
+}
+
+fn http_response(status: u16, content_type: &str, body: &str) -> Vec<u8> {
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        413 => "Payload Too Large",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        _ => "OK",
+    };
+    format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        status,
+        reason,
+        content_type,
+        body.len(),
+        body
+    )
+    .into_bytes()
+}
+
+fn header_end(raw: &[u8]) -> Option<usize> {
+    raw.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn read_http_request(stream: &mut TcpStream) -> Result<(String, String, HashMap<String, String>, Vec<u8>), String> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let mut raw = Vec::new();
+    let mut buf = [0_u8; 8192];
+    let mut expected_len = None;
+    loop {
+        let n = stream.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        raw.extend_from_slice(&buf[..n]);
+        if let Some(end) = header_end(&raw) {
+            let headers = String::from_utf8_lossy(&raw[..end]).to_string();
+            let content_length = headers
+                .lines()
+                .find_map(|line| line.split_once(':').filter(|(key, _)| key.eq_ignore_ascii_case("content-length")).and_then(|(_, value)| value.trim().parse::<usize>().ok()))
+                .unwrap_or(0);
+            expected_len = Some(end + 4 + content_length);
+        }
+        if let Some(len) = expected_len {
+            if raw.len() >= len {
+                break;
+            }
+        }
+        if raw.len() > 64 * 1024 * 1024 {
+            return Err("Request body exceeds 64 MiB.".to_string());
+        }
+    }
+    let end = header_end(&raw).ok_or_else(|| "Invalid HTTP request.".to_string())?;
+    let header_text = String::from_utf8_lossy(&raw[..end]).to_string();
+    let mut lines = header_text.lines();
+    let request_line = lines.next().ok_or_else(|| "Missing HTTP request line.".to_string())?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("").to_string();
+    let path = parts.next().unwrap_or("/").to_string();
+    let mut headers = HashMap::new();
+    for line in lines {
+        if let Some((key, value)) = line.split_once(':') {
+            headers.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
+        }
+    }
+    let body = raw[end + 4..].to_vec();
+    Ok((method, path, headers, body))
+}
+
+fn proxy_http_request(config: &Value, method: &str, path: &str, body: &[u8], content_type: &str) -> Result<(u16, String, String), String> {
+    let host = string_at(config, &["server", "host"]);
+    let port = number_at(config, &["server", "port"], 8080);
+    let client_host = client_host_for(&host);
+    let addr = format!("{}:{}", client_host, port);
+    let mut addrs = addr.to_socket_addrs().map_err(|e| e.to_string())?;
+    let socket = addrs.next().ok_or_else(|| format!("Could not resolve {}", addr))?;
+    let mut stream = TcpStream::connect_timeout(&socket, Duration::from_secs(10)).map_err(|e| e.to_string())?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(600)));
+    let request = format!(
+        "{} {} HTTP/1.1\r\nHost: {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        method,
+        path,
+        client_host,
+        content_type,
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+    if !body.is_empty() {
+        stream.write_all(body).map_err(|e| e.to_string())?;
+    }
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).map_err(|e| e.to_string())?;
+    let mut parts = raw.splitn(2, "\r\n\r\n");
+    let headers = parts.next().unwrap_or_default();
+    let response_body = parts.next().unwrap_or_default().to_string();
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .unwrap_or(502);
+    let response_content_type = headers
+        .lines()
+        .find_map(|line| line.split_once(':').filter(|(key, _)| key.eq_ignore_ascii_case("content-type")).map(|(_, value)| value.trim().to_string()))
+        .unwrap_or_else(|| "application/json".to_string());
+    Ok((status, response_content_type, response_body))
+}
+
+fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128) {
+    let response = match read_http_request(&mut stream) {
+        Ok((method, path, headers, body)) => {
+            if method == "GET" && path == "/health" {
+                let body = json!({
+                    "status": "ok",
+                    "gateway": gateway_status_value(config, true, Some(started_at), 0, 0)
+                })
+                .to_string();
+                http_response(200, "application/json", &body)
+            } else if method == "GET" && path == "/v1/models" {
+                match proxy_http_request(config, "GET", "/v1/models", &[], "application/json") {
+                    Ok((status, content_type, body)) => http_response(status, &content_type, &body),
+                    Err(err) => http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string()),
+                }
+            } else if method == "POST" && (path == "/v1/chat/completions" || path == "/v1/completions") {
+                match serde_json::from_slice::<Value>(&body) {
+                    Ok(parsed) => {
+                        let estimated = estimate_openai_prompt_tokens(&parsed);
+                        let max_prompt = active_max_prompt_tokens(config);
+                        if estimated > max_prompt {
+                            http_response(
+                                413,
+                                "application/json",
+                                &json!({
+                                    "error": {
+                                        "message": format!("Atlas blocked this request before llama.cpp because the prompt estimate {} exceeds the active profile budget {}.", estimated, max_prompt),
+                                        "type": "atlas_context_budget_exceeded",
+                                        "budget": { "estimatedPromptTokens": estimated, "usablePromptTokens": max_prompt, "overflowTokens": estimated - max_prompt }
+                                    }
+                                })
+                                .to_string(),
+                            )
+                        } else {
+                            let content_type = headers.get("content-type").map(String::as_str).unwrap_or("application/json");
+                            match proxy_http_request(config, "POST", &path, &body, content_type) {
+                                Ok((status, content_type, body)) => http_response(status, &content_type, &body),
+                                Err(err) => http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string()),
+                            }
+                        }
+                    }
+                    Err(_) => http_response(400, "application/json", &json!({ "error": { "message": "Request body must be JSON.", "type": "invalid_request_error" } }).to_string()),
+                }
+            } else {
+                http_response(404, "application/json", &json!({ "error": { "message": format!("Atlas Gateway route not found: {}", path), "type": "not_found" } }).to_string())
+            }
+        }
+        Err(err) => http_response(400, "application/json", &json!({ "error": { "message": err, "type": "invalid_request_error" } }).to_string()),
+    };
+    let _ = stream.write_all(&response);
+}
+
+fn gateway_status_value(config: &Value, running: bool, started_at: Option<u128>, request_count: i64, rejected_count: i64) -> Value {
+    let host = string_at(config, &["agentRuntime", "gateway", "host"]);
+    let port = number_at(config, &["agentRuntime", "gateway", "port"], 18080);
+    json!({
+        "running": running,
+        "host": if host.is_empty() { "127.0.0.1".to_string() } else { host },
+        "port": port,
+        "upstream": format!("http://{}:{}", client_host_for(&string_at(config, &["server", "host"])), number_at(config, &["server", "port"], 8080)),
+        "modelAlias": string_at(config, &["agentRuntime", "gateway", "modelAlias"]),
+        "activeProfileId": string_at(config, &["agentRuntime", "activeProfileId"]),
+        "startedAt": started_at,
+        "requestCount": request_count,
+        "rejectedCount": rejected_count
+    })
+}
+
+#[tauri::command]
+fn gateway_start(state: State<AppState>) -> Result<Value, AppError> {
+    let config = load_config_value()?;
+    let host = string_at(&config, &["agentRuntime", "gateway", "host"]);
+    let host = if host.trim().is_empty() { "127.0.0.1".to_string() } else { host };
+    let port = number_at(&config, &["agentRuntime", "gateway", "port"], 18080);
+    {
+        let gateway = state.gateway.lock().map_err(|_| app_error("agent-gateway", "Gateway state unavailable", "Could not lock gateway state.", "Restart Atlas Workbench and try again."))?;
+        if gateway.is_some() {
+            return Ok(gateway_status_value(&config, true, gateway.as_ref().map(|g| g.started_at), 0, 0));
+        }
+    }
+    let listener = TcpListener::bind(format!("{}:{}", host, port)).map_err(|e| app_error("agent-gateway", "Could not start Atlas Gateway", e.to_string(), "Choose a different gateway port or stop the process already using it."))?;
+    listener.set_nonblocking(true).map_err(|e| app_error("agent-gateway", "Could not configure Atlas Gateway", e.to_string(), "Restart Atlas Workbench and try again."))?;
+    let (tx, rx) = mpsc::channel::<()>();
+    let started_at = now();
+    let thread_config = config.clone();
+    thread::spawn(move || {
+        loop {
+            if rx.try_recv().is_ok() {
+                break;
+            }
+            match listener.accept() {
+                Ok((stream, _addr)) => handle_gateway_stream(stream, &thread_config, started_at),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(50)),
+                Err(_) => thread::sleep(Duration::from_millis(100)),
+            }
+        }
+    });
+    let mut gateway = state.gateway.lock().map_err(|_| app_error("agent-gateway", "Gateway state unavailable", "Could not lock gateway state.", "Restart Atlas Workbench and try again."))?;
+    *gateway = Some(GatewayRuntime { shutdown: tx, started_at, host, port });
+    Ok(gateway_status_value(&config, true, Some(started_at), 0, 0))
+}
+
+#[tauri::command]
+fn gateway_stop(state: State<AppState>) -> Result<Value, AppError> {
+    let config = load_config_value()?;
+    let mut gateway = state.gateway.lock().map_err(|_| app_error("agent-gateway", "Gateway state unavailable", "Could not lock gateway state.", "Restart Atlas Workbench and try again."))?;
+    if let Some(runtime) = gateway.take() {
+        let _ = runtime.shutdown.send(());
+    }
+    Ok(gateway_status_value(&config, false, None, 0, 0))
+}
+
+#[tauri::command]
+fn gateway_status(state: State<AppState>) -> Result<Value, AppError> {
+    let config = load_config_value()?;
+    let gateway = state.gateway.lock().map_err(|_| app_error("agent-gateway", "Gateway state unavailable", "Could not lock gateway state.", "Restart Atlas Workbench and try again."))?;
+    let started_at = gateway.as_ref().map(|g| g.started_at);
+    let mut status = gateway_status_value(&config, gateway.is_some(), started_at, 0, 0);
+    if let (Some(runtime), Some(obj)) = (gateway.as_ref(), status.as_object_mut()) {
+        obj.insert("host".to_string(), json!(runtime.host.clone()));
+        obj.insert("port".to_string(), json!(runtime.port));
+    }
+    Ok(status)
+}
+
+#[tauri::command]
+fn gateway_health() -> Result<Value, AppError> {
+    runtime_health(Some(3000))
+}
+
+#[tauri::command]
+fn runtime_health(timeout_ms: Option<u64>) -> Result<Value, AppError> {
+    let config = load_config_value()?;
+    let host = string_at(&config, &["server", "host"]);
+    let port = number_at(&config, &["server", "port"], 8080);
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(3000));
+    let started = Instant::now();
+    let checked_at = now();
+    let endpoint = format!(
+        "http://{}:{}",
+        match host.trim() { "" | "0.0.0.0" | "::" | "*" => "127.0.0.1", other => other.trim_matches(&['[', ']'][..]) },
+        port
+    );
+    match (http_get_text(&host, port, "/health", timeout), http_get_text(&host, port, "/v1/models", timeout)) {
+        (Ok((health_status, _)), Ok((models_status, models_body))) => {
+            let models_json = serde_json::from_str::<Value>(&models_body).unwrap_or_else(|_| json!({}));
+            let model_ids: Vec<String> = models_json
+                .get("data")
+                .and_then(Value::as_array)
+                .map(|items| items.iter().filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string)).collect())
+                .unwrap_or_default();
+            let health_ok = (200..300).contains(&health_status);
+            let models_ok = (200..300).contains(&models_status) && !model_ids.is_empty();
+            Ok(json!({
+                "state": if health_ok && models_ok { "healthy" } else { "degraded" },
+                "endpoint": endpoint,
+                "checkedAt": checked_at,
+                "latencyMs": started.elapsed().as_millis(),
+                "healthOk": health_ok,
+                "modelsOk": models_ok,
+                "modelIds": model_ids,
+                "reason": if health_ok && models_ok { "llama.cpp health and model endpoints are responding." } else { "llama.cpp answered but health/model discovery is incomplete." }
+            }))
+        }
+        (Err(err), _) | (_, Err(err)) => Ok(json!({
+            "state": "unreachable",
+            "endpoint": endpoint,
+            "checkedAt": checked_at,
+            "latencyMs": started.elapsed().as_millis(),
+            "healthOk": false,
+            "modelsOk": false,
+            "modelIds": [],
+            "reason": err
+        })),
+    }
+}
+
 #[tauri::command]
 fn server_start(app: AppHandle, state: State<AppState>, config: Value) -> Result<Value, AppError> {
     let model = string_at(&config, &["model", "selectedModel"]);
@@ -1547,6 +2227,13 @@ fn main() {
             binary_validate,
             binary_set,
             model_list,
+            runtime_profiles,
+            runtime_apply_profile,
+            runtime_health,
+            gateway_start,
+            gateway_stop,
+            gateway_status,
+            gateway_health,
             server_start,
             server_stop,
             server_status,

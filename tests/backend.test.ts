@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { createServer, type Server, get as httpGetRaw } from "node:http";
 import { existsSync } from "node:fs";
 import { Backend, CommandError } from "@/ipc/backend";
+import { defaultConfig } from "@/config/defaults";
 import {
   makeBackend,
   mkTempDir,
@@ -103,6 +104,22 @@ describe("backend config & binary commands", () => {
     expect(reloaded.binaryPaths.finetune).toBe(FAKE_FINETUNE);
   });
 
+  it("applies an agent runtime profile to persisted llama.cpp flags", async () => {
+    const h = await withFakeBinary();
+    harnesses.push(h);
+    const updated = (await h.backend.handle("runtime.applyProfile", { profileId: "3090-ti-qwen-3-6-27b-96k-coder" })) as AppConfig;
+    expect(updated.agentRuntime.activeProfileId).toBe("3090-ti-qwen-3-6-27b-96k-coder");
+    expect(updated.agentRuntime.gateway.modelAlias).toBe("atlas/3090-ti-qwen-3-6-27b-96k-coder");
+    expect(updated.serverFlags["ctx-size"]).toBe(98304);
+    expect(updated.model.selectedModel).toBe("/home/reid/Downloads/Qwen3.6-27B-Q4_K_M.gguf");
+    expect(updated.serverFlags["ubatch-size"]).toBe(256);
+    expect(updated.serverFlags.metrics).toBe(true);
+
+    const reloaded = (await h.backend.handle("config.load")) as AppConfig;
+    expect(reloaded.agentRuntime.activeProfileId).toBe("3090-ti-qwen-3-6-27b-96k-coder");
+    expect(reloaded.serverFlags["ctx-size"]).toBe(98304);
+  });
+
   it("rejects a nonexistent binary path with a plain-language error", async () => {
     const h = await withFakeBinary();
     harnesses.push(h);
@@ -187,6 +204,33 @@ describe("backend server start/stop with a real child process", () => {
     } catch (err) {
       expect((err as CommandError).message).toMatch(/not found/i);
     }
+  });
+});
+
+describe("backend Atlas Gateway commands", () => {
+  it("starts and stops the gateway through backend commands", async () => {
+    const port = await getFreePort();
+    if (port === null) return;
+    const gatewayPort = await getFreePort();
+    if (gatewayPort === null) return;
+    const h = await withFakeBinary({
+      server: { host: "127.0.0.1", port },
+      agentRuntime: {
+        ...defaultConfig().agentRuntime,
+        gateway: { ...defaultConfig().agentRuntime.gateway, port: gatewayPort },
+      },
+    });
+    harnesses.push(h);
+
+    const started = (await h.backend.handle("gateway.start")) as { running: boolean; port: number };
+    expect(started.running).toBe(true);
+    expect(started.port).toBe(gatewayPort);
+
+    const status = (await h.backend.handle("gateway.status")) as { running: boolean };
+    expect(status.running).toBe(true);
+
+    const stopped = (await h.backend.handle("gateway.stop")) as { running: boolean };
+    expect(stopped.running).toBe(false);
   });
 });
 

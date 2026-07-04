@@ -30,6 +30,38 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({ status: "ok", model }));
     return;
   }
+  if (req.url === "/v1/models") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ data: [{ id: model || "fake-model" }] }));
+    return;
+  }
+  if (req.url === "/v1/chat/completions" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk.toString();
+    });
+    req.on("end", () => {
+      const parsed = body ? JSON.parse(body) : {};
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl-fake",
+        object: "chat.completion",
+        model: model || parsed.model || "fake-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "fake completion" }, finish_reason: "stop" }],
+      }));
+    });
+    return;
+  }
+  if (req.url === "/v1/completions" && req.method === "POST") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      id: "cmpl-fake",
+      object: "text_completion",
+      model: model || "fake-model",
+      choices: [{ index: 0, text: "fake completion", finish_reason: "stop" }],
+    }));
+    return;
+  }
   res.writeHead(200, { "Content-Type": "text/plain" });
   res.end("ok");
 });

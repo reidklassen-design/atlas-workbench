@@ -1,7 +1,7 @@
 import { invoke as defaultInvoke, onEvent as defaultOnEvent, type IpcEventName } from "@/ipc/transport";
 import { defaultConfig } from "@/config/defaults";
 import { describeGpuOffload } from "@/process/flagBuilder";
-import type { AppConfig, AppError, FlagValues, ProcessLogLine, ProcessStatus, SystemMetrics } from "@/config/types";
+import type { AgentRuntimeProfile, AppConfig, AppError, FlagValues, GatewayStatus, ProcessLogLine, ProcessStatus, RuntimeHealthProbeResult, SystemMetrics } from "@/config/types";
 
 export interface ListModelsResult {
   directory: string;
@@ -28,6 +28,17 @@ export class AppController {
   serverLogs: ProcessLogLine[] = [];
   trainingLogs: ProcessLogLine[] = [];
   metrics: SystemMetrics | null = null;
+  gateway: GatewayStatus = {
+    running: false,
+    host: "127.0.0.1",
+    port: 18080,
+    upstream: "",
+    modelAlias: "atlas/local",
+    activeProfileId: "",
+    requestCount: 0,
+    rejectedCount: 0,
+  };
+  runtimeHealth: RuntimeHealthProbeResult | null = null;
   errors: AppError[] = [];
   models: ListModelsResult = { directory: "", files: [] };
   lastTraining: { outputPath: string; exists: boolean; exitCode: number | null } | null = null;
@@ -125,6 +136,7 @@ export class AppController {
       }
       void this.refreshServerStatus();
       void this.refreshTrainingStatus();
+      void this.refreshGatewayStatus();
     } catch (err) {
       this.commit({ loaded: true, needsBinarySetup: true });
       this.pushError(err as AppError, () => this.init());
@@ -215,6 +227,64 @@ export class AppController {
     } catch (err) {
       this.pushError(err as AppError, () => this.applyServerFlags(serverFlags));
       return false;
+    }
+  }
+
+  async applyAgentProfile(profileId: string): Promise<boolean> {
+    try {
+      const saved = await this.invoke<AppConfig>("runtime.applyProfile", { profileId });
+      this.commit({ config: saved });
+      const profile = saved.agentRuntime.profiles.find((item: AgentRuntimeProfile) => item.id === saved.agentRuntime.activeProfileId);
+      this.pushServerLog(`Agent runtime profile applied: ${profile?.name ?? saved.agentRuntime.activeProfileId}`);
+      return true;
+    } catch (err) {
+      this.pushError(err as AppError, () => this.applyAgentProfile(profileId));
+      return false;
+    }
+  }
+
+  async startGateway(): Promise<boolean> {
+    try {
+      const status = await this.invoke<GatewayStatus>("gateway.start");
+      this.commit({ gateway: status });
+      this.pushServerLog(`Atlas Gateway listening at http://${status.host}:${status.port}/v1 for ${status.modelAlias}.`);
+      return true;
+    } catch (err) {
+      this.pushError(err as AppError, () => this.startGateway());
+      return false;
+    }
+  }
+
+  async stopGateway(): Promise<boolean> {
+    try {
+      const status = await this.invoke<GatewayStatus>("gateway.stop");
+      this.commit({ gateway: status });
+      this.pushServerLog("Atlas Gateway stopped.");
+      return true;
+    } catch (err) {
+      this.pushError(err as AppError, () => this.stopGateway());
+      return false;
+    }
+  }
+
+  async refreshGatewayStatus(): Promise<GatewayStatus | null> {
+    try {
+      const status = await this.invoke<GatewayStatus>("gateway.status");
+      this.commit({ gateway: status });
+      return status;
+    } catch {
+      return null;
+    }
+  }
+
+  async refreshRuntimeHealth(): Promise<RuntimeHealthProbeResult | null> {
+    try {
+      const health = await this.invoke<RuntimeHealthProbeResult>("runtime.health");
+      this.commit({ runtimeHealth: health });
+      return health;
+    } catch (err) {
+      this.pushError(err as AppError, () => this.refreshRuntimeHealth());
+      return null;
     }
   }
 

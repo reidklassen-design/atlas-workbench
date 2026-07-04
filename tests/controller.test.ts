@@ -96,7 +96,7 @@ describe("AppController", () => {
   });
 
   it("shows an immediate error when Start is clicked without a selected model", async () => {
-    const h = await makeBackend();
+    const h = await makeBackend({ config: { model: { directory: "", selectedModel: "" } } });
     harnesses.push(h);
     const controller = makeController(h);
     await controller.init();

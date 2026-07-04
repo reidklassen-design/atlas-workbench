@@ -7,6 +7,9 @@ import { defaultConfig } from "@/config/defaults";
 import { ProcessManager, ProcessStartError, type ProcessKind } from "@/process/processManager";
 import { SystemMonitor } from "@/monitor/systemMonitor";
 import { createErrorLog, ErrorLog } from "@/errors/errorLog";
+import { AtlasGateway } from "@/runtime/gateway";
+import { probeLlamaServerHealth } from "@/runtime/healthWatchdog";
+import { applyAgentProfile } from "@/runtime/profiles";
 import {
   fromDirectoryError,
   fromGeneric,
@@ -35,6 +38,7 @@ export interface BackendOptions {
   processManager?: ProcessManager;
   monitor?: SystemMonitor;
   errorLog?: ErrorLog;
+  gateway?: AtlasGateway;
 }
 
 export interface ListModelsResult {
@@ -55,6 +59,7 @@ export class Backend extends EventEmitter {
   readonly processManager: ProcessManager;
   readonly monitor: SystemMonitor;
   readonly errorLog: ErrorLog;
+  readonly gateway: AtlasGateway;
   private stopping = new Map<string, boolean>();
 
   constructor(opts: BackendOptions = {}) {
@@ -63,6 +68,7 @@ export class Backend extends EventEmitter {
     this.processManager = opts.processManager ?? new ProcessManager();
     this.monitor = opts.monitor ?? new SystemMonitor();
     this.errorLog = opts.errorLog ?? createErrorLog();
+    this.gateway = opts.gateway ?? new AtlasGateway();
 
     this.processManager.on("log", (line: ProcessLogLine & { kind: ProcessKind }) => this.emit("log", line));
     this.processManager.on("status", (status: ProcessStatus) => this.handleProcessStatus(status));
@@ -125,6 +131,34 @@ export class Backend extends EventEmitter {
         await this.configStore.save(config);
         return this.configStore.load();
       }
+      case "runtime.profiles": {
+        const config = await this.configStore.load();
+        return config.agentRuntime.profiles;
+      }
+      case "runtime.applyProfile": {
+        const config = await this.configStore.load();
+        const updated = applyAgentProfile(config, String(args.profileId ?? config.agentRuntime.activeProfileId));
+        await this.configStore.save(updated);
+        return this.configStore.load();
+      }
+      case "runtime.health": {
+        const config = await this.configStore.load();
+        return probeLlamaServerHealth({
+          host: config.server.host,
+          port: config.server.port,
+          timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
+        });
+      }
+      case "gateway.start": {
+        const config = await this.configStore.load();
+        return this.gateway.start({ config });
+      }
+      case "gateway.stop":
+        return this.gateway.stop();
+      case "gateway.status":
+        return this.gateway.status();
+      case "gateway.health":
+        return this.gateway.health();
       case "binary.validate":
         return validateBinary(String(args.path ?? ""));
       case "binary.set": {

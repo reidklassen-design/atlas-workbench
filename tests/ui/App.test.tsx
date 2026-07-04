@@ -5,19 +5,24 @@ import { Shell } from "@/ui/App";
 import { renderApp, baselineConfig, baselineHandlers } from "./helpers";
 
 describe("App shell", () => {
-  it("renders all five tabs and switches between them", async () => {
+  it("renders all tabs and switches between them", async () => {
     const { controller } = await renderApp(<Shell />);
     expect(screen.getByTestId("tab-server")).toBeDefined();
     expect(screen.getByTestId("tab-models")).toBeDefined();
     expect(screen.getByTestId("tab-settings")).toBeDefined();
     expect(screen.getByTestId("tab-fine-tuning")).toBeDefined();
     expect(screen.getByTestId("tab-system-monitor")).toBeDefined();
+    expect(screen.getByTestId("tab-agent-runtime")).toBeDefined();
 
     await userEvent.click(screen.getByTestId("tab-system-monitor"));
     expect(screen.getByTestId("gpu-not-detected")).toBeDefined();
 
     await userEvent.click(screen.getByTestId("tab-settings"));
     expect(screen.getByTestId("binary-settings-section")).toBeDefined();
+
+    await userEvent.click(screen.getByTestId("tab-agent-runtime"));
+    expect(screen.getByTestId("snippet-opencode")).toBeDefined();
+    expect(screen.getByTestId("snippet-codex")).toBeDefined();
     controller.dispose();
   });
 

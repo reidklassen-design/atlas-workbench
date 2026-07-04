@@ -51,6 +51,12 @@ export async function makeBackend(opts: { config?: Partial<AppConfig>; withGpu?:
     model: { ...base.model, ...(opts.config?.model ?? {}) },
     serverFlags: { ...base.serverFlags, ...(opts.config?.serverFlags ?? {}) },
     finetune: { ...base.finetune, ...(opts.config?.finetune ?? {}) },
+    agentRuntime: {
+      ...base.agentRuntime,
+      ...(opts.config?.agentRuntime ?? {}),
+      gateway: { ...base.agentRuntime.gateway, ...(opts.config?.agentRuntime?.gateway ?? {}) },
+      profiles: opts.config?.agentRuntime?.profiles ?? base.agentRuntime.profiles,
+    },
   };
   await configStore.save(config);
 
@@ -69,6 +75,11 @@ export async function makeBackend(opts: { config?: Partial<AppConfig>; withGpu?:
       }
       try {
         await backend.processManager.stop("finetune");
+      } catch {
+        // ignore
+      }
+      try {
+        await backend.gateway.stop();
       } catch {
         // ignore
       }

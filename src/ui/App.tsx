@@ -7,12 +7,14 @@ import { ModelsTab } from "@/ui/tabs/ModelsTab";
 import { SettingsTab } from "@/ui/tabs/SettingsTab";
 import { FineTuningTab } from "@/ui/tabs/FineTuningTab";
 import { SystemMonitorTab } from "@/ui/tabs/SystemMonitorTab";
+import { AgentRuntimeTab } from "@/ui/tabs/AgentRuntimeTab";
 
-type TabId = "server" | "models" | "settings" | "fine-tuning" | "system-monitor";
+type TabId = "server" | "models" | "agent-runtime" | "settings" | "fine-tuning" | "system-monitor";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "server", label: "Server" },
   { id: "models", label: "Models" },
+  { id: "agent-runtime", label: "Agent Runtime" },
   { id: "settings", label: "Settings" },
   { id: "fine-tuning", label: "Fine-tuning" },
   { id: "system-monitor", label: "System Monitor" },
@@ -58,6 +60,7 @@ export function Shell(): JSX.Element {
             <>
               {active === "server" ? <ServerTab /> : null}
               {active === "models" ? <ModelsTab /> : null}
+              {active === "agent-runtime" ? <AgentRuntimeTab /> : null}
               {active === "settings" ? <SettingsTab /> : null}
               {active === "fine-tuning" ? <FineTuningTab /> : null}
               {active === "system-monitor" ? <SystemMonitorTab /> : null}

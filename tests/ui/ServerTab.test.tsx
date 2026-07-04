@@ -11,8 +11,8 @@ describe("ServerTab", () => {
     expect((screen.getByTestId("start-server") as HTMLButtonElement)).toBeDefined();
     expect((screen.getByTestId("stop-server") as HTMLButtonElement)).toBeDefined();
     expect(screen.getByTestId("server-log-file").textContent).toContain("server.log");
-    expect((screen.getByTestId("server-host") as HTMLInputElement).value).toBe("127.0.0.1");
-    expect((screen.getByTestId("server-port") as HTMLInputElement).value).toBe("8080");
+    expect((screen.getByTestId("server-host") as HTMLInputElement).value).toBe("0.0.0.0");
+    expect((screen.getByTestId("server-port") as HTMLInputElement).value).toBe("8099");
     controller.dispose();
   });
 
@@ -56,13 +56,13 @@ describe("ServerTab", () => {
     });
     const { controller, emit } = await renderApp(<ServerTab />, handlers);
     emit("status", { kind: "server", state: "starting", pid: 123, startedAt: Date.now() - 2000 });
-    emit("log", { kind: "server", stream: "stdout", text: "Waiting for llama-server health at http://127.0.0.1:8080/health", ts: Date.now() });
+    emit("log", { kind: "server", stream: "stdout", text: "Waiting for llama-server health at http://127.0.0.1:8099/health", ts: Date.now() });
     await new Promise((r) => setTimeout(r, 10));
 
     expect(screen.getByTestId("server-launch-progress").textContent).toMatch(/loading model/i);
     expect(screen.getByTestId("server-launch-phase").textContent).toMatch(/health endpoint/i);
     expect(screen.getByTestId("server-launch-model").textContent).toBe("alpha.gguf");
-    expect(screen.getByTestId("server-launch-endpoint").textContent).toBe("http://127.0.0.1:8080/health");
+    expect(screen.getByTestId("server-launch-endpoint").textContent).toBe("http://127.0.0.1:8099/health");
     expect(screen.getByTestId("server-launch-pid").textContent).toMatch(/pid 123/);
     expect(screen.getByTestId("server-launch-command").textContent).toContain("--model /models/alpha.gguf");
     expect(screen.queryByRole("progressbar")).toBeNull();
