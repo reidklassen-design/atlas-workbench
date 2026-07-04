@@ -26,6 +26,7 @@
   "bundle": {
     "active": true,
     "targets": ["deb"],
+    "icon": ["icons/icon.png"],
     "category": "DeveloperTool",
     "shortDescription": "Modern llama.cpp desktop control panel",
     "longDescription": "Atlas Workbench wraps the user's existing llama.cpp binaries with a modern desktop GUI for server control, model management, flags, fine-tuning, monitoring, and clear error recovery.",

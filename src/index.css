@@ -103,23 +103,13 @@
     min-width: 0;
   }
   .neo-brand-mark {
-    position: relative;
-    display: grid;
     height: 2.85rem;
     width: 2.85rem;
-    place-items: center;
-    border: 1px solid rgba(124, 255, 43, 0.58);
+    border: 1px solid rgba(124, 255, 43, 0.5);
     border-radius: 0.9rem;
-    background: radial-gradient(circle, rgba(57, 255, 20, 0.2), rgba(7, 19, 13, 0.95) 62%);
+    background: #030806;
     box-shadow: 0 0 28px rgba(57, 255, 20, 0.2), inset 0 0 18px rgba(57, 255, 20, 0.12);
-    transform: rotate(45deg);
-  }
-  .neo-brand-mark span {
-    height: 0.88rem;
-    width: 0.88rem;
-    border-radius: 0.2rem;
-    background: #39ff14;
-    box-shadow: 0 0 18px rgba(57, 255, 20, 0.9);
+    object-fit: cover;
   }
   .neo-brand-title {
     font-size: clamp(1.1rem, 2vw, 1.55rem);
