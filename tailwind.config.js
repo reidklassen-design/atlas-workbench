@@ -4,13 +4,13 @@ export default {
   theme: {
     extend: {
       colors: {
-        panel: "#0f172a",
-        surface: "#1e293b",
-        accent: "#38bdf8",
-        accent2: "#818cf8",
-        ok: "#22c55e",
-        warn: "#f59e0b",
-        err: "#ef4444",
+        panel: "#050D08",
+        surface: "#07130D",
+        accent: "#7CFF2B",
+        accent2: "#39FF14",
+        ok: "#39FF14",
+        warn: "#FFD166",
+        err: "#FF4D4D",
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "Segoe UI", "sans-serif"],
