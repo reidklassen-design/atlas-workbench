@@ -16,7 +16,7 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
       aria-checked={checked}
       aria-label={label}
       onClick={() => onChange(!checked)}
-      className={clsx("relative h-6 w-11 rounded-full transition", checked ? "bg-accent" : "bg-slate-600")}
+      className={clsx("relative h-6 w-11 rounded-full border transition", checked ? "border-accent/60 bg-accent" : "border-white/10 bg-slate-700")}
     >
       <span
         className={clsx(
@@ -39,7 +39,7 @@ export function FlagWidget({ def, value, onChange }: FlagWidgetProps): JSX.Eleme
             ⓘ
           </span>
         </label>
-        <span className="font-mono text-xs text-slate-500" title={`Command-line flag: ${def.flag}`}>
+        <span className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 font-mono text-xs text-slate-500" title={`Command-line flag: ${def.flag}`}>
           {def.flag}
         </span>
       </div>
@@ -84,7 +84,7 @@ export function FlagWidget({ def, value, onChange }: FlagWidgetProps): JSX.Eleme
         <div className="flex items-center gap-3">
           <input
             type="range"
-            className="h-2 flex-1 cursor-pointer appearance-none rounded-full bg-slate-600 accent-accent"
+            className="h-2 flex-1 cursor-pointer appearance-none rounded-full bg-slate-700 accent-accent"
             min={def.min}
             max={def.max}
             step={def.step}

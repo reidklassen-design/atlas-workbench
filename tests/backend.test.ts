@@ -4,6 +4,7 @@ import { createServer, type Server, get as httpGetRaw } from "node:http";
 import { existsSync } from "node:fs";
 import { Backend, CommandError } from "@/ipc/backend";
 import { defaultConfig } from "@/config/defaults";
+import type { SystemMonitor } from "@/monitor/systemMonitor";
 import {
   makeBackend,
   mkTempDir,
@@ -133,7 +134,7 @@ describe("backend config & binary commands", () => {
     harnesses.push(h);
     const updated = (await h.backend.handle("runtime.applyProfile", { profileId: "3090-ti-qwen-3-6-27b-96k-coder" })) as AppConfig;
     expect(updated.agentRuntime.activeProfileId).toBe("3090-ti-qwen-3-6-27b-96k-coder");
-    expect(updated.agentRuntime.gateway.modelAlias).toBe("atlas/3090-ti-qwen-3-6-27b-96k-coder");
+    expect(updated.agentRuntime.gateway.modelAlias).toBe("Qwen3.6-27B");
     expect(updated.serverFlags["ctx-size"]).toBe(98304);
     expect(updated.model.selectedModel).toBe("/home/reid/Downloads/Qwen3.6-27B-Q4_K_M.gguf");
     expect(updated.serverFlags["ubatch-size"]).toBe(256);
@@ -188,10 +189,19 @@ describe("backend config & binary commands", () => {
       ].join("\n"),
     ]);
     if (metricsServer === null) return;
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy.mockReturnValueOnce(1000).mockReturnValueOnce(2000).mockReturnValueOnce(6000).mockReturnValueOnce(7000);
+    const runtimeNow = vi.fn().mockReturnValueOnce(1000).mockReturnValueOnce(2000).mockReturnValueOnce(6000).mockReturnValueOnce(7000);
     try {
-      const h = await withFakeBinary({ server: { host: "127.0.0.1", port: metricsServer.port } });
+      const monitor = {
+        collect: vi.fn(async () => ({
+          cpu: { overall: 0, perCore: [] },
+          ram: { used: 0, total: 1, percent: 0 },
+          gpu: { detected: false, note: "GPU not detected" },
+          processes: [],
+          ts: 0,
+        })),
+        reset: vi.fn(),
+      } as unknown as SystemMonitor;
+      const h = await makeBackend({ config: { server: { host: "127.0.0.1", port: metricsServer.port } }, monitor, now: runtimeNow });
       harnesses.push(h);
 
       const first = (await h.backend.handle("monitor.collect", { pids: [] })) as SystemMetrics;
@@ -208,7 +218,6 @@ describe("backend config & binary commands", () => {
       expect(active.runtime?.contextTokens).toBe(35935);
       expect(active.runtime?.contextWindowTokens).toBe(98304);
     } finally {
-      nowSpy.mockRestore();
       await metricsServer.close();
     }
   });

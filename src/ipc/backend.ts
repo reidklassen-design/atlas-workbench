@@ -19,7 +19,7 @@ import {
   fromProcessStartError,
   isPortInUse,
 } from "@/errors/errorMapper";
-import type { AppConfig, AppError, GatewayStatus, ProcessLogLine, ProcessStatus, RuntimeMetrics, SystemMetrics } from "@/config/types";
+import type { AppConfig, AppError, GatewayStatus, ProcessLogLine, ProcessStatus, RuntimeMetrics, SystemMetrics, VisualLocatorStatus } from "@/config/types";
 
 export class CommandError extends Error {
   constructor(
@@ -39,6 +39,7 @@ export interface BackendOptions {
   monitor?: SystemMonitor;
   errorLog?: ErrorLog;
   gateway?: AtlasGateway;
+  now?: () => number;
 }
 
 export interface ListModelsResult {
@@ -120,7 +121,7 @@ async function collectRuntimeSlotContext(config: AppConfig): Promise<RuntimeSlot
   }
 }
 
-async function collectRuntimeMetrics(config: AppConfig, previous?: RuntimeCounterSample): Promise<RuntimeMetricsResult | undefined> {
+async function collectRuntimeMetrics(config: AppConfig, previous?: RuntimeCounterSample, now: () => number = Date.now): Promise<RuntimeMetricsResult | undefined> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 750);
   try {
@@ -132,7 +133,7 @@ async function collectRuntimeMetrics(config: AppConfig, previous?: RuntimeCounte
     const sample: RuntimeCounterSample = {
       generationTokensTotal: prometheusMetric(text, "llamacpp:tokens_predicted_total"),
       promptTokensTotal: prometheusMetric(text, "llamacpp:prompt_tokens_total"),
-      observedAtMs: Date.now(),
+      observedAtMs: now(),
     };
     const baseline = previous && shouldKeepRuntimeBaseline(sample, previous, requestsProcessing) ? previous : sample;
     const averageGenerationTokensPerSecond = prometheusMetric(text, "llamacpp:predicted_tokens_seconds");
@@ -179,6 +180,7 @@ export class Backend extends EventEmitter {
   readonly monitor: SystemMonitor;
   readonly errorLog: ErrorLog;
   readonly gateway: AtlasGateway;
+  private readonly now: () => number;
   private stopping = new Map<string, boolean>();
   private runtimeCounterSample?: RuntimeCounterSample;
 
@@ -189,6 +191,7 @@ export class Backend extends EventEmitter {
     this.monitor = opts.monitor ?? new SystemMonitor();
     this.errorLog = opts.errorLog ?? createErrorLog();
     this.gateway = opts.gateway ?? new AtlasGateway();
+    this.now = opts.now ?? Date.now;
 
     this.processManager.on("log", (line: ProcessLogLine & { kind: ProcessKind }) => this.emit("log", line));
     this.processManager.on("status", (status: ProcessStatus) => this.handleProcessStatus(status));
@@ -207,6 +210,7 @@ export class Backend extends EventEmitter {
     this.emit("status", status);
     if (status.state !== "exited") return;
     const kind = status.kind;
+    if (kind === "visual-locator") return;
     const userStopped = this.stopping.get(kind) === true;
     this.stopping.set(kind, false);
 
@@ -287,6 +291,12 @@ export class Backend extends EventEmitter {
       }
       case "gateway.health":
         return this.gateway.health();
+      case "visualLocator.start":
+      case "visualLocator.stop":
+      case "visualLocator.status": {
+        const config = await this.configStore.load();
+        return this.visualLocatorStatus(config);
+      }
       case "binary.validate":
         return validateBinary(String(args.path ?? ""));
       case "binary.set": {
@@ -332,7 +342,7 @@ export class Backend extends EventEmitter {
       case "monitor.collect": {
         const pids = (args.pids as { pid: number; name: string }[]) ?? [];
         const config = await this.configStore.load();
-        const [metrics, runtime] = await Promise.all([this.monitor.collect(pids), collectRuntimeMetrics(config, this.runtimeCounterSample)]);
+        const [metrics, runtime] = await Promise.all([this.monitor.collect(pids), collectRuntimeMetrics(config, this.runtimeCounterSample, this.now)]);
         if (runtime?.sample) this.runtimeCounterSample = runtime.sample;
         return { ...metrics, runtime: runtime?.metrics } satisfies SystemMetrics;
       }
@@ -411,6 +421,26 @@ export class Backend extends EventEmitter {
     } catch {
       return base;
     }
+  }
+
+  private visualLocatorStatus(config: AppConfig): VisualLocatorStatus {
+    const locator = config.agentRuntime.visualLocator;
+    const host = locator.host || "127.0.0.1";
+    return {
+      running: false,
+      external: false,
+      state: "stopped",
+      host,
+      port: locator.port,
+      endpoint: `http://${clientHost(host)}:${locator.port}/v1`,
+      modelAlias: locator.modelAlias,
+      serverPath: locator.serverPath,
+      modelPath: locator.modelPath,
+      mmprojPath: locator.mmprojPath,
+      gpuLayers: locator.gpuLayers,
+      contextSize: locator.contextSize,
+      apiKey: locator.apiKey,
+    };
   }
 
   private async startServer(config: AppConfig): Promise<ProcessStatus> {

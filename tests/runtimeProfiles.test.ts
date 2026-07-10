@@ -7,33 +7,48 @@ import { buildServerArgs } from "@/process/flagBuilder";
 describe("agent runtime profiles", () => {
   it("ships main, compression, and rescue profiles", () => {
     const runtime = defaultAgentRuntimeConfig();
-    expect(runtime.activeProfileId).toBe("3090-ti-ornith-35b-96k-always-on");
-    expect(runtime.profiles[0]?.modelPath).toContain("ornith-1.0-35b-Q4_K_M.gguf");
-    expect(runtime.profiles[1]?.id).toBe("3090-ti-ornith-35b-125k-max-context");
-    expect(runtime.profiles[2]?.modelPath).toContain("Qwen3.6-27B-Q4_K_M.gguf");
-    expect(runtime.profiles[3]?.modelPath).toContain("ornith-1.0-9b-Q8_0.gguf");
+    expect(runtime.activeProfileId).toBe("3090-ti-qwen3-coder-30b-a3b-q4-xl-188k-full-gpu");
+    expect(runtime.gateway.modelAlias).toBe("Qwen3-Coder-30B-A3B");
+    expect(runtime.profiles[0]?.modelPath).toContain("Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf");
+    expect(runtime.profiles[0]?.id).toBe("3090-ti-qwen3-coder-30b-a3b-q4-xl-188k-full-gpu");
+    expect(runtime.profiles[1]?.id).toBe("3090-ti-qwen3-coder-30b-a3b-q4-xl-262k-max-context");
+    expect(runtime.profiles[2]?.id).toBe("3090-ti-qwen3-coder-30b-a3b-q4-xl-131k-headroom");
+    expect(runtime.profiles[3]?.modelPath).toContain("ornith-1.0-35b-Q4_K_M.gguf");
+    expect(runtime.profiles[4]?.id).toBe("3090-ti-ornith-35b-125k-max-context");
+    expect(runtime.profiles[5]?.modelPath).toContain("Qwen3.6-27B-Q4_K_M.gguf");
+    expect(runtime.profiles[6]?.modelPath).toContain("ornith-1.0-9b-Q8_0.gguf");
     expect(runtime.profiles.map((profile) => profile.role)).toContain("main-coding");
     expect(runtime.profiles.map((profile) => profile.role)).toContain("compression");
     expect(runtime.profiles.map((profile) => profile.role)).toContain("rescue");
   });
 
   it("applies a profile to real llama.cpp server flags", () => {
-    const config = applyAgentProfile(defaultConfig(), "3090-ti-ornith-35b-96k-always-on");
+    const config = applyAgentProfile(defaultConfig(), "3090-ti-qwen3-coder-30b-a3b-q4-xl-188k-full-gpu");
     const args = buildServerArgs(config);
-    expect(config.agentRuntime.activeProfileId).toBe("3090-ti-ornith-35b-96k-always-on");
-    expect(config.model.selectedModel).toContain("ornith-1.0-35b-Q4_K_M.gguf");
-    expect(args[args.indexOf("--ctx-size") + 1]).toBe("98304");
+    expect(config.agentRuntime.activeProfileId).toBe("3090-ti-qwen3-coder-30b-a3b-q4-xl-188k-full-gpu");
+    expect(config.agentRuntime.gateway.modelAlias).toBe("Qwen3-Coder-30B-A3B");
+    expect(config.model.selectedModel).toContain("Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf");
+    expect(args[args.indexOf("--ctx-size") + 1]).toBe("188000");
+    expect(args[args.indexOf("--n-gpu-layers") + 1]).toBe("999");
     expect(args[args.indexOf("--batch-size") + 1]).toBe("1024");
     expect(args[args.indexOf("--ubatch-size") + 1]).toBe("256");
-    expect(args[args.indexOf("--cache-type-k") + 1]).toBe("q8_0");
-    expect(args[args.indexOf("--cache-type-v") + 1]).toBe("q8_0");
+    expect(args[args.indexOf("--cache-type-k") + 1]).toBe("q4_0");
+    expect(args[args.indexOf("--cache-type-v") + 1]).toBe("q4_0");
     expect(args[args.indexOf("--reasoning") + 1]).toBe("off");
-    expect(args[args.indexOf("--reasoning-budget") + 1]).toBe("0");
+    expect(args[args.indexOf("--repeat-penalty") + 1]).toBe("1.05");
     expect(args).toContain("--metrics");
     expect(args).toContain("--context-shift");
   });
 
   it("switches the selected model when applying alternate hardware profiles", () => {
+    const maxQwen = applyAgentProfile(defaultConfig(), "3090-ti-qwen3-coder-30b-a3b-q4-xl-262k-max-context");
+    expect(maxQwen.serverFlags["ctx-size"]).toBe(262144);
+    expect(maxQwen.gpu.offloadMode).toBe("auto");
+
+    const headroomQwen = applyAgentProfile(defaultConfig(), "3090-ti-qwen3-coder-30b-a3b-q4-xl-131k-headroom");
+    expect(headroomQwen.serverFlags["ctx-size"]).toBe(131072);
+    expect(headroomQwen.gpu.offloadMode).toBe("full");
+
     const maxContext = applyAgentProfile(defaultConfig(), "3090-ti-ornith-35b-125k-max-context");
     expect(maxContext.serverFlags["ctx-size"]).toBe(125000);
 

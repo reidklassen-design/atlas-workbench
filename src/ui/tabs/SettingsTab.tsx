@@ -44,6 +44,8 @@ export function SettingsTab(): JSX.Element {
   const [serverPath, setServerPath] = useState(config.binaryPaths.server);
   const [finetunePath, setFinetunePath] = useState(config.binaryPaths.finetune);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [systemPromptDraft, setSystemPromptDraft] = useState(config.systemPrompt);
+  const [systemPromptSaveState, setSystemPromptSaveState] = useState<"idle" | "dirty" | "saving" | "saved" | "error">("idle");
   const [flagDraft, setFlagDraft] = useState<FlagValues>(config.serverFlags);
   const [flagSaveState, setFlagSaveState] = useState<"idle" | "dirty" | "saving" | "saved" | "error">("idle");
   const [flagSearch, setFlagSearch] = useState("");
@@ -74,6 +76,10 @@ export function SettingsTab(): JSX.Element {
     setFlagDraft(config.serverFlags);
   }, [config.serverFlags]);
 
+  useEffect(() => {
+    setSystemPromptDraft(config.systemPrompt);
+  }, [config.systemPrompt]);
+
   function setFlag(id: string, value: string | number | boolean): void {
     setFlagDraft((draft) => ({ ...draft, [id]: value }));
     setFlagSaveState("dirty");
@@ -98,6 +104,12 @@ export function SettingsTab(): JSX.Element {
     setFlagSaveState("saving");
     const ok = await controller.applyServerFlags(flagDraft);
     setFlagSaveState(ok ? "saved" : "error");
+  }
+
+  async function applySystemPrompt(): Promise<void> {
+    setSystemPromptSaveState("saving");
+    const ok = await controller.applySystemPrompt(systemPromptDraft);
+    setSystemPromptSaveState(ok ? "saved" : "error");
   }
 
   async function saveBinaryPaths(): Promise<void> {
@@ -212,6 +224,47 @@ export function SettingsTab(): JSX.Element {
                   Reset section
                 </button>
               </div>
+              {section === "Prompts & Templates" ? (
+                <div className="mb-4 rounded-lg border border-[#3D7A32]/50 bg-[#07130D]/60 p-4" data-testid="system-prompt-settings-section">
+                  <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-base font-semibold text-white">System prompt</h4>
+                      <p className="mt-1 text-sm text-slate-400">Atlas inserts this as the first system message for chat requests sent through the gateway.</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {systemPromptSaveState === "dirty" ? <span className="text-xs text-amber-300" role="status">Unsaved prompt changes</span> : null}
+                      {systemPromptSaveState === "saved" ? <span className="text-xs text-emerald-300" role="status">System prompt applied</span> : null}
+                      {systemPromptSaveState === "error" ? <span className="text-xs text-red-300" role="alert">Apply failed</span> : null}
+                      <button type="button" className="btn-primary" disabled={systemPromptSaveState === "saving" || systemPromptSaveState === "idle" || systemPromptSaveState === "saved"} onClick={() => void applySystemPrompt()} data-testid="apply-system-prompt">
+                        {systemPromptSaveState === "saving" ? "Applying…" : "Apply system prompt"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        onClick={() => {
+                          setSystemPromptDraft("");
+                          setSystemPromptSaveState("dirty");
+                        }}
+                        data-testid="clear-system-prompt"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  <label htmlFor="settings-system-prompt" className="field-label">Prompt text</label>
+                  <textarea
+                    id="settings-system-prompt"
+                    className="input min-h-48 w-full resize-y"
+                    value={systemPromptDraft}
+                    onChange={(event) => {
+                      setSystemPromptDraft(event.target.value);
+                      setSystemPromptSaveState("dirty");
+                    }}
+                    data-testid="settings-system-prompt"
+                  />
+                  <p className="mt-2 text-xs text-slate-400">Apply saves the prompt and injects it into new chat requests through Atlas Gateway. The model server is left running; unload and reload it separately whenever you choose.</p>
+                </div>
+              ) : null}
               <div className={clsx("grid gap-4", "sm:grid-cols-2 lg:grid-cols-3")}>
                 {flags.map((def) => (
                   <FlagWidget

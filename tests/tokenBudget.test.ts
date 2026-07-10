@@ -12,7 +12,7 @@ describe("token budget policy", () => {
 
   it("computes usable prompt budget after output, system, and safety reserves", () => {
     const policy = findAgentProfile(defaultConfig()).requestPolicy;
-    expect(usablePromptTokens(policy)).toBe(77824);
+    expect(usablePromptTokens(policy)).toBe(163424);
   });
 
   it("allows bounded coding requests through", () => {

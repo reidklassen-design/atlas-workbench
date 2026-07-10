@@ -96,6 +96,20 @@ export interface AgentGatewayConfig {
   autoCompressionEnabled: boolean;
 }
 
+export interface VisualLocatorConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  apiKey: string;
+  modelAlias: string;
+  serverPath: string;
+  modelPath: string;
+  mmprojPath: string;
+  gpuLayers: string;
+  contextSize: number;
+  autoStartWithGateway: boolean;
+}
+
 export interface AgentRuntimeProfile {
   id: string;
   name: string;
@@ -111,6 +125,7 @@ export interface AgentRuntimeProfile {
 export interface AgentRuntimeConfig {
   activeProfileId: string;
   gateway: AgentGatewayConfig;
+  visualLocator: VisualLocatorConfig;
   profiles: AgentRuntimeProfile[];
 }
 
@@ -120,6 +135,7 @@ export interface AppConfig {
   gpu: GpuConfig;
   model: ModelState;
   server: ServerEndpoint;
+  systemPrompt: string;
   serverFlags: FlagValues;
   finetune: FinetuneValues;
   agentRuntime: AgentRuntimeConfig;
@@ -133,7 +149,7 @@ export interface ProcessLogLine {
 }
 
 export interface ProcessStatus {
-  kind: "server" | "finetune";
+  kind: "server" | "finetune" | "visual-locator";
   state: "stopped" | "starting" | "running" | "exited";
   pid?: number;
   exitCode?: number | null;
@@ -247,4 +263,25 @@ export interface GatewayStatus {
     action: "forward" | "reject" | "compress" | "retrieve";
     reasons: string[];
   };
+}
+
+export interface VisualLocatorStatus {
+  running: boolean;
+  external?: boolean;
+  state?: "stopped" | "starting" | "running" | "exited";
+  pid?: number;
+  exitCode?: number | null;
+  host: string;
+  port: number;
+  endpoint: string;
+  modelAlias: string;
+  serverPath: string;
+  modelPath: string;
+  mmprojPath: string;
+  gpuLayers: string;
+  contextSize: number;
+  apiKey?: string;
+  cmdline?: string;
+  startedAt?: number;
+  endedAt?: number;
 }

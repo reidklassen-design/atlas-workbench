@@ -44,6 +44,17 @@ describe("SettingsTab flags", () => {
     controller.dispose();
   });
 
+  it("places a large system prompt editor under Prompts & Templates", async () => {
+    const { controller } = await renderApp(<SettingsTab />);
+
+    showSection("Prompts & Templates");
+
+    const section = screen.getByTestId("flag-section-Prompts & Templates").closest("section");
+    expect(section?.querySelector('[data-testid="settings-system-prompt"]')).toBeDefined();
+    expect(screen.getByTestId("settings-system-prompt").className).toContain("min-h-48");
+    controller.dispose();
+  });
+
   it("filters server flags by label, command flag, section, and help text", async () => {
     const { controller } = await renderApp(<SettingsTab />);
     const search = screen.getByTestId("settings-flag-search") as HTMLInputElement;
@@ -93,6 +104,40 @@ describe("SettingsTab flags", () => {
     fireEvent.click(screen.getByTestId("apply-server-flags"));
     await screen.findByText(/server flags applied/i);
     expect(saved[saved.length - 1].serverFlags["ctx-size"]).toBe(4096);
+    controller.dispose();
+  });
+
+  it("applies a system prompt without restarting the running model server", async () => {
+    const saved: AppConfig[] = [];
+    const starts: AppConfig[] = [];
+    let stops = 0;
+    const handlers = baselineHandlers({
+      "config.save": (args) => {
+        saved.push(args.config as AppConfig);
+        return args.config as AppConfig;
+      },
+      "server.stop": () => {
+        stops += 1;
+        return { kind: "server", state: "exited", exitCode: 0 };
+      },
+      "server.start": (args) => {
+        starts.push(args.config as AppConfig);
+        return { kind: "server", state: "running", pid: 9876, startedAt: Date.now() };
+      },
+    });
+    const { controller, emit } = await renderApp(<SettingsTab />, handlers);
+    emit("status", { kind: "server", state: "running", pid: 1234, startedAt: Date.now() });
+    await new Promise((r) => setTimeout(r, 10));
+
+    showSection("Prompts & Templates");
+    fireEvent.change(screen.getByTestId("settings-system-prompt"), { target: { value: "You are terse and practical." } });
+    expect(screen.getByText(/unsaved prompt changes/i)).toBeDefined();
+    fireEvent.click(screen.getByTestId("apply-system-prompt"));
+    await screen.findByText(/system prompt applied/i);
+
+    expect(saved[saved.length - 1].systemPrompt).toBe("You are terse and practical.");
+    expect(stops).toBe(0);
+    expect(starts).toHaveLength(0);
     controller.dispose();
   });
 

@@ -21,6 +21,7 @@ export function AgentRuntimeTab(): JSX.Element {
   const controller = useAppController();
   const config = useControllerState((c) => c.config);
   const gateway = useControllerState((c) => c.gateway);
+  const visualLocator = useControllerState((c) => c.visualLocator);
   const health = useControllerState((c) => c.runtimeHealth);
   const [busy, setBusy] = useState<string | null>(null);
   const activeProfile = useMemo(
@@ -45,6 +46,18 @@ export function AgentRuntimeTab(): JSX.Element {
   async function stopGateway(): Promise<void> {
     setBusy("gateway:stop");
     await controller.stopGateway();
+    setBusy(null);
+  }
+
+  async function startVisualLocator(): Promise<void> {
+    setBusy("locator:start");
+    await controller.startVisualLocator();
+    setBusy(null);
+  }
+
+  async function stopVisualLocator(): Promise<void> {
+    setBusy("locator:stop");
+    await controller.stopVisualLocator();
     setBusy(null);
   }
 
@@ -94,13 +107,19 @@ export function AgentRuntimeTab(): JSX.Element {
             <button type="button" className="btn-danger" disabled={!gateway.running || gateway.external || busy === "gateway:stop"} onClick={() => void stopGateway()} data-testid="gateway-stop">
               Stop Gateway
             </button>
+            <button type="button" className="btn-primary" disabled={!config.agentRuntime.visualLocator.enabled || visualLocator.running || busy === "locator:start"} onClick={() => void startVisualLocator()} data-testid="visual-locator-start">
+              {busy === "locator:start" ? "Starting..." : "Start Locator"}
+            </button>
+            <button type="button" className="btn-danger" disabled={!visualLocator.running || busy === "locator:stop"} onClick={() => void stopVisualLocator()} data-testid="visual-locator-stop">
+              Stop Locator
+            </button>
             <button type="button" className="btn-ghost" disabled={busy === "health"} onClick={() => void checkHealth()} data-testid="runtime-health-check">
               {busy === "health" ? "Checking..." : "Check Health"}
             </button>
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-5">
+        <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
           <div className="rounded-lg border border-slate-700 bg-black/20 p-3">
             <div className="text-xs text-slate-400">Gateway</div>
             <div className={gateway.running ? "mt-1 text-lg font-semibold text-emerald-300" : "mt-1 text-lg font-semibold text-slate-300"} data-testid="gateway-state">
@@ -127,6 +146,13 @@ export function AgentRuntimeTab(): JSX.Element {
             </div>
             <div className="mt-1 text-xs text-slate-500" data-testid="gateway-compressed-count">{gateway.compressedCount ?? 0} compressed</div>
           </div>
+          <div className="rounded-lg border border-slate-700 bg-black/20 p-3">
+            <div className="text-xs text-slate-400">Visual Locator</div>
+            <div className={visualLocator.running ? "mt-1 text-lg font-semibold text-emerald-300" : "mt-1 text-lg font-semibold text-slate-300"} data-testid="visual-locator-state">
+              {visualLocator.running ? (visualLocator.external ? "External" : "Running") : "Stopped"}
+            </div>
+            <div className="mt-1 text-xs text-slate-500" data-testid="visual-locator-pid">{visualLocator.pid ? `pid ${visualLocator.pid}` : `:${visualLocator.port}`}</div>
+          </div>
         </div>
 
         <div className="mt-4 rounded-lg border border-slate-700 bg-black/30 p-3">
@@ -134,6 +160,16 @@ export function AgentRuntimeTab(): JSX.Element {
           <code className="block break-all text-xs text-slate-200" data-testid="opencode-endpoint">Base URL: {cliSnippets.gatewayBaseUrl}</code>
           <code className="mt-1 block break-all text-xs text-slate-200" data-testid="opencode-model">Model: {config.agentRuntime.gateway.modelAlias}</code>
           <code className="mt-1 block break-all text-xs text-slate-200">API key: {config.agentRuntime.gateway.apiKey}</code>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-slate-700 bg-black/30 p-3">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-accent">Visual Locator Endpoint</div>
+          <code className="block break-all text-xs text-slate-200" data-testid="visual-locator-endpoint">Base URL: {visualLocator.endpoint}</code>
+          <code className="mt-1 block break-all text-xs text-slate-200" data-testid="visual-locator-model">Model: {visualLocator.modelAlias}</code>
+          <code className="mt-1 block break-all text-xs text-slate-200">GPU layers: {visualLocator.gpuLayers}; context: {visualLocator.contextSize.toLocaleString()}</code>
+          <code className="mt-1 block break-all text-xs text-slate-400">Server: {visualLocator.serverPath}</code>
+          <code className="mt-1 block break-all text-xs text-slate-400">GGUF: {visualLocator.modelPath}</code>
+          <code className="mt-1 block break-all text-xs text-slate-400">mmproj: {visualLocator.mmprojPath}</code>
         </div>
 
         {health ? (

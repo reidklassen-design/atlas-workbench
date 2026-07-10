@@ -31,14 +31,14 @@ export interface BackendHarness {
   cleanup: () => Promise<void>;
 }
 
-export async function makeBackend(opts: { config?: Partial<AppConfig>; withGpu?: boolean; env?: Record<string, string> } = {}): Promise<BackendHarness> {
+export async function makeBackend(opts: { config?: Partial<AppConfig>; withGpu?: boolean; env?: Record<string, string>; monitor?: SystemMonitor; now?: () => number } = {}): Promise<BackendHarness> {
   const tmpDir = await mkTempDir();
   const configPath = join(tmpDir, "config.json");
   const logPath = join(tmpDir, "error.log");
   const configStore = createConfigStore(configPath);
   const errorLog = createErrorLog(logPath);
   const processManager = new ProcessManager({ env: opts.env });
-  const monitor = new SystemMonitor({ gpuProbe: opts.withGpu ? undefined : createNoGpuProbe("GPU not detected") });
+  const monitor = opts.monitor ?? new SystemMonitor({ gpuProbe: opts.withGpu ? undefined : createNoGpuProbe("GPU not detected") });
 
   const base = defaultConfig();
   base.binaryPaths = { server: FAKE_SERVER, finetune: FAKE_FINETUNE };
@@ -60,7 +60,7 @@ export async function makeBackend(opts: { config?: Partial<AppConfig>; withGpu?:
   };
   await configStore.save(config);
 
-  const backend = new Backend({ configStore, processManager, monitor, errorLog });
+  const backend = new Backend({ configStore, processManager, monitor, errorLog, now: opts.now });
 
   return {
     backend,

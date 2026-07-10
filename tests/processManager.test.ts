@@ -46,8 +46,12 @@ async function getFreePort(): Promise<number | null> {
   });
 }
 
-function mockSpawn(opts: { stdout?: string[]; stderr?: string[]; exitCode?: number | null; delayMs?: number; stayRunning?: boolean } = {}): typeof nodeSpawn {
-  return (() => {
+function mockSpawn(
+  opts: { stdout?: string[]; stderr?: string[]; exitCode?: number | null; delayMs?: number; stayRunning?: boolean } = {},
+  onSpawn?: (...args: Parameters<typeof nodeSpawn>) => void,
+): typeof nodeSpawn {
+  return ((...args: Parameters<typeof nodeSpawn>) => {
+    onSpawn?.(...args);
     const child = new EventEmitter() as ChildProcess;
     const stdout = new PassThrough();
     const stderr = new PassThrough();
@@ -177,6 +181,20 @@ describe("ProcessManager server lifecycle", () => {
     expect(pm.isRunning("server")).toBe(true);
     await pm.stop("server");
     expect(pm.isRunning("server")).toBe(false);
+  });
+
+  it("starts the server in its own process group so Stop can unload GPU memory", async () => {
+    const { config } = cfg();
+    let spawnOptions: Parameters<typeof nodeSpawn>[2] | undefined;
+    const pm = new ProcessManager({
+      spawnImpl: mockSpawn({ stayRunning: true }, (_cmd, _args, opts) => {
+        spawnOptions = opts;
+      }),
+    });
+
+    await pm.startServer(config);
+    expect(spawnOptions).toEqual(expect.objectContaining({ detached: true }));
+    await pm.stop("server");
   });
 
   it("reports a crash with the exit code and stderr", async () => {

@@ -104,12 +104,80 @@ function budgetInputFromOpenAiRequest(body: Record<string, unknown>): {
   };
 }
 
+function structuredJsonOutputRequested(body: Record<string, unknown>): boolean {
+  const responseFormat = body.response_format;
+  if (responseFormat && typeof responseFormat === "object") {
+    const text = JSON.stringify(responseFormat).toLowerCase();
+    if (text.includes("json_object") || text.includes("json_schema") || text.includes('"json"')) return true;
+  }
+
+  const parts: string[] = [];
+  const messages = Array.isArray(body.messages) ? body.messages as Array<Record<string, unknown>> : [];
+  for (const message of messages) parts.push(messageText(message.content));
+  if (typeof body.prompt === "string") parts.push(body.prompt);
+  const text = parts.join("\n").toLowerCase();
+  return text.includes("json") && (
+    text.includes("return only")
+    || text.includes("strict json")
+    || text.includes("valid json")
+    || text.includes("json object")
+    || text.includes("json blueprint")
+    || text.includes("no markdown")
+    || text.includes("no explanation")
+  );
+}
+
+function normalizeOpenAiRequestForGateway(body: Record<string, unknown>): { body: Record<string, unknown>; structuredOutput: boolean } {
+  if (!structuredJsonOutputRequested(body)) return { body, structuredOutput: false };
+  const next = JSON.parse(JSON.stringify(body)) as Record<string, unknown>;
+  const existing = next.chat_template_kwargs;
+  const kwargs = existing && typeof existing === "object" && !Array.isArray(existing)
+    ? existing as Record<string, unknown>
+    : {};
+  kwargs.enable_thinking = false;
+  next.chat_template_kwargs = kwargs;
+  return { body: next, structuredOutput: true };
+}
+
+function withConfiguredSystemPrompt(body: Record<string, unknown>, systemPrompt: string): Record<string, unknown> {
+  const prompt = systemPrompt.trim();
+  if (!prompt || !Array.isArray(body.messages)) return body;
+  const next = JSON.parse(JSON.stringify(body)) as Record<string, unknown>;
+  const messages = Array.isArray(next.messages) ? next.messages : [];
+  next.messages = [{ role: "system", content: prompt }, ...messages];
+  return next;
+}
+
+function structuredEmptyContentError(raw: string): Record<string, unknown> | null {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const choices = Array.isArray(parsed.choices) ? parsed.choices as Array<Record<string, unknown>> : [];
+  const reasoningOnly = choices.some((choice) => {
+    const message = choice.message as Record<string, unknown> | undefined;
+    return message
+      && String(message.content ?? "").trim() === ""
+      && String(message.reasoning_content ?? "").trim() !== "";
+  });
+  if (!reasoningOnly) return null;
+  return {
+    error: {
+      message: "Atlas blocked an upstream reasoning-only response: the model returned hidden reasoning_content but empty final message.content for a structured JSON request. Atlas should disable thinking for structured output; retry the request.",
+      type: "atlas_structured_empty_content",
+    },
+  };
+}
+
 async function proxyFetch(
   fetchImpl: typeof fetch,
   upstreamUrl: string,
   req: IncomingMessage,
   res: ServerResponse,
   body?: string,
+  options: { structuredOutput?: boolean } = {},
 ): Promise<void> {
   const headers: Record<string, string> = {};
   const contentType = req.headers["content-type"];
@@ -121,6 +189,19 @@ async function proxyFetch(
     headers,
     body: body === undefined || req.method === "GET" || req.method === "HEAD" ? undefined : body,
   });
+  if (options.structuredOutput) {
+    const text = await upstream.text();
+    const emptyContentError = structuredEmptyContentError(text);
+    if (upstream.status >= 200 && upstream.status < 300 && emptyContentError) {
+      sendJson(res, 502, emptyContentError);
+      return;
+    }
+    const headers = Object.fromEntries(upstream.headers.entries());
+    headers["content-length"] = String(Buffer.byteLength(text));
+    res.writeHead(upstream.status, headers);
+    res.end(text);
+    return;
+  }
   res.writeHead(upstream.status, Object.fromEntries(upstream.headers.entries()));
   if (!upstream.body) {
     res.end();
@@ -253,13 +334,15 @@ export class AtlasGateway {
         sendJson(res, 400, { error: { message: "Request body must be JSON.", type: "invalid_request_error" } });
         return;
       }
+      const withSystemPrompt = path === "/v1/chat/completions" ? withConfiguredSystemPrompt(parsed, this.config.systemPrompt) : parsed;
+      const normalized = normalizeOpenAiRequestForGateway(withSystemPrompt);
       const profile = findAgentProfile(this.config);
-      const budget = evaluateTokenBudget(budgetInputFromOpenAiRequest(parsed), profile.requestPolicy);
+      const budget = evaluateTokenBudget(budgetInputFromOpenAiRequest(normalized.body), profile.requestPolicy);
       this.lastBudget = budget;
       if (!budget.ok) {
         if (budget.action === "compress" || this.config.agentRuntime.gateway.autoCompressionEnabled) {
           this.compactionActive = true;
-          const compressed = compressOpenAiRequest(parsed, budget.usablePromptTokens);
+          const compressed = compressOpenAiRequest(normalized.body, budget.usablePromptTokens);
           const compressedBudget = evaluateTokenBudget(budgetInputFromOpenAiRequest(compressed.body), profile.requestPolicy);
           this.lastBudget = compressedBudget;
           if (compressed.compressed && compressedBudget.ok) {
@@ -271,7 +354,7 @@ export class AtlasGateway {
               ts: Date.now(),
             };
             try {
-              await proxyFetch(this.fetchImpl, `${urlBase(this.config.server.host, this.config.server.port)}${path}`, req, res, JSON.stringify(compressed.body));
+              await proxyFetch(this.fetchImpl, `${urlBase(this.config.server.host, this.config.server.port)}${path}`, req, res, JSON.stringify(compressed.body), { structuredOutput: normalized.structuredOutput });
             } finally {
               this.compactionActive = false;
             }
@@ -289,7 +372,7 @@ export class AtlasGateway {
         });
         return;
       }
-      await proxyFetch(this.fetchImpl, `${urlBase(this.config.server.host, this.config.server.port)}${path}`, req, res, body);
+      await proxyFetch(this.fetchImpl, `${urlBase(this.config.server.host, this.config.server.port)}${path}`, req, res, JSON.stringify(normalized.body), { structuredOutput: normalized.structuredOutput });
       return;
     }
     sendJson(res, 404, { error: { message: `Atlas Gateway route not found: ${path}`, type: "not_found" } });

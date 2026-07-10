@@ -3,7 +3,11 @@ import type { AgentRequestPolicy, AgentRuntimeConfig, AgentRuntimeProfile, AppCo
 
 const ONE_SECOND = 1000;
 
-export const AGENT_RUNTIME_PROFILE_VERSION = 5;
+export const AGENT_RUNTIME_PROFILE_VERSION = 9;
+
+const QWEN3_CODER_MODEL_DIRECTORY = "/home/reid/Downloads";
+const QWEN3_CODER_MODEL_PATH = `${QWEN3_CODER_MODEL_DIRECTORY}/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf`;
+const QWEN3_CODER_ALIAS = "Qwen3-Coder-30B-A3B";
 
 export function codingRequestPolicy(overrides: Partial<AgentRequestPolicy> = {}): AgentRequestPolicy {
   const contextWindowTokens = overrides.contextWindowTokens ?? 131072;
@@ -32,8 +36,100 @@ function serverFlags(overrides: FlagValues): FlagValues {
   return { ...defaultServerFlags(), ...overrides };
 }
 
+function qwen3CoderServerFlags(overrides: FlagValues): FlagValues {
+  return serverFlags({
+    alias: QWEN3_CODER_ALIAS,
+    parallel: 1,
+    "batch-size": 1024,
+    "ubatch-size": 256,
+    "flash-attn": "on",
+    "cache-type-k": "q4_0",
+    "cache-type-v": "q4_0",
+    "cont-batching": true,
+    slots: true,
+    metrics: true,
+    "context-shift": true,
+    predict: 8192,
+    reasoning: "off",
+    "reasoning-budget": 0,
+    temp: 0.2,
+    "top-k": 20,
+    "top-p": 0.8,
+    "repeat-penalty": 1.05,
+    threads: 16,
+    "threads-batch": 16,
+    ...overrides,
+  });
+}
+
 export function defaultAgentRuntimeProfiles(): AgentRuntimeProfile[] {
   return [
+    {
+      id: "3090-ti-qwen3-coder-30b-a3b-q4-xl-188k-full-gpu",
+      name: "3090 Ti Qwen3-Coder 30B 188K Full-GPU",
+      role: "main-coding",
+      description: "Default DarkFactory coder: measured highest all-GPU context on the 3090 Ti with Qwen3-Coder Q4 XL, q4 KV cache, and fast 1024/256 batching.",
+      modelDirectory: QWEN3_CODER_MODEL_DIRECTORY,
+      modelPath: QWEN3_CODER_MODEL_PATH,
+      gpuOffloadMode: "full",
+      serverFlagOverrides: qwen3CoderServerFlags({
+        "ctx-size": 188000,
+      }),
+      requestPolicy: codingRequestPolicy({
+        contextWindowTokens: 188000,
+        reservedOutputTokens: 8192,
+        maxOutputTokens: 8192,
+        safetyMarginTokens: 12288,
+        maxSingleFileTokens: 40000,
+        maxLogTokens: 28000,
+        requestTimeoutMs: 20 * 60 * ONE_SECOND,
+        streamStallTimeoutMs: 90 * ONE_SECOND,
+      }),
+    },
+    {
+      id: "3090-ti-qwen3-coder-30b-a3b-q4-xl-262k-max-context",
+      name: "3090 Ti Qwen3-Coder 30B 262K Max Context",
+      role: "main-coding",
+      description: "Maximum-context Qwen3-Coder profile for giant repo reads. It reaches the native 262K window by letting llama.cpp auto-fit and spill some tensors to CPU.",
+      modelDirectory: QWEN3_CODER_MODEL_DIRECTORY,
+      modelPath: QWEN3_CODER_MODEL_PATH,
+      gpuOffloadMode: "auto",
+      serverFlagOverrides: qwen3CoderServerFlags({
+        "ctx-size": 262144,
+      }),
+      requestPolicy: codingRequestPolicy({
+        contextWindowTokens: 262144,
+        reservedOutputTokens: 8192,
+        maxOutputTokens: 8192,
+        safetyMarginTokens: 16384,
+        maxSingleFileTokens: 48000,
+        maxLogTokens: 32000,
+        requestTimeoutMs: 20 * 60 * ONE_SECOND,
+        streamStallTimeoutMs: 90 * ONE_SECOND,
+      }),
+    },
+    {
+      id: "3090-ti-qwen3-coder-30b-a3b-q4-xl-131k-headroom",
+      name: "3090 Ti Qwen3-Coder 30B 131K GPU Headroom",
+      role: "main-coding",
+      description: "All-GPU Qwen3-Coder profile with extra VRAM margin. Use it when you want the same coder but less pressure on the desktop or sidecar tools.",
+      modelDirectory: QWEN3_CODER_MODEL_DIRECTORY,
+      modelPath: QWEN3_CODER_MODEL_PATH,
+      gpuOffloadMode: "full",
+      serverFlagOverrides: qwen3CoderServerFlags({
+        "ctx-size": 131072,
+      }),
+      requestPolicy: codingRequestPolicy({
+        contextWindowTokens: 131072,
+        reservedOutputTokens: 8192,
+        maxOutputTokens: 8192,
+        safetyMarginTokens: 12288,
+        maxSingleFileTokens: 32000,
+        maxLogTokens: 24000,
+        requestTimeoutMs: 20 * 60 * ONE_SECOND,
+        streamStallTimeoutMs: 90 * ONE_SECOND,
+      }),
+    },
     {
       id: "3090-ti-ornith-35b-96k-always-on",
       name: "3090 Ti Ornith 35B 96K Always-On",
@@ -179,6 +275,7 @@ export function defaultAgentRuntimeProfiles(): AgentRuntimeProfile[] {
       modelPath: "/home/reid/Downloads/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
       gpuOffloadMode: "cpu",
       serverFlagOverrides: serverFlags({
+        alias: "Qwen2.5-3B-compress",
         "ctx-size": 32768,
         parallel: 1,
         "batch-size": 256,
@@ -210,6 +307,7 @@ export function defaultAgentRuntimeProfiles(): AgentRuntimeProfile[] {
       description: "Fallback profile for recovering after VRAM pressure, repeated stalls, or driver instability.",
       gpuOffloadMode: "auto",
       serverFlagOverrides: serverFlags({
+        alias: "Qwythos-9B-rescue",
         "ctx-size": 32768,
         parallel: 1,
         "batch-size": 256,
@@ -236,14 +334,27 @@ export function defaultAgentRuntimeProfiles(): AgentRuntimeProfile[] {
 
 export function defaultAgentRuntimeConfig(): AgentRuntimeConfig {
   return {
-    activeProfileId: "3090-ti-ornith-35b-96k-always-on",
+    activeProfileId: "3090-ti-qwen3-coder-30b-a3b-q4-xl-188k-full-gpu",
     gateway: {
       enabled: false,
       host: "0.0.0.0",
       port: 18080,
       apiKey: "atlas-local",
-      modelAlias: "atlas/3090-ti-ornith-35b-96k-always-on",
+      modelAlias: QWEN3_CODER_ALIAS,
       autoCompressionEnabled: true,
+    },
+    visualLocator: {
+      enabled: true,
+      host: "127.0.0.1",
+      port: 8000,
+      apiKey: "local",
+      modelAlias: "nvidia/LocateAnything-3B",
+      serverPath: "/home/reid/.local/share/darkfactory/locateanything/bin/llama-server",
+      modelPath: "/home/reid/DarkFactoryModels/LocateAnything-3B-GGUF/LocateAnything-3B-Q4_K_M.gguf",
+      mmprojPath: "/home/reid/DarkFactoryModels/LocateAnything-3B-GGUF/mmproj-LocateAnything-3B-BF16.gguf",
+      gpuLayers: "all",
+      contextSize: 4096,
+      autoStartWithGateway: false,
     },
     profiles: defaultAgentRuntimeProfiles(),
   };
@@ -259,8 +370,8 @@ export function applyAgentProfile(config: AppConfig, profileId: string): AppConf
   const profile = findAgentProfile(config, profileId);
   const next: AppConfig = JSON.parse(JSON.stringify(config));
   next.agentRuntime.activeProfileId = profile.id;
-  next.agentRuntime.gateway.modelAlias = `atlas/${profile.id}`;
   next.serverFlags = { ...next.serverFlags, ...profile.serverFlagOverrides };
+  next.agentRuntime.gateway.modelAlias = String(next.serverFlags.alias || `atlas/${profile.id}`);
   if (profile.modelPath) {
     next.model.selectedModel = profile.modelPath;
     next.model.directory = profile.modelDirectory ?? profile.modelPath.slice(0, profile.modelPath.lastIndexOf("/"));

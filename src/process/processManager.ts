@@ -65,6 +65,22 @@ export class ProcessManager extends EventEmitter {
     if (arr.length > TAIL_LINES) arr.shift();
   }
 
+  private signalProcess(proc: ChildProcess, signal: NodeJS.Signals): void {
+    if (proc.pid !== undefined) {
+      try {
+        process.kill(-proc.pid, signal);
+        return;
+      } catch {
+        // Fall back to the child PID when the platform or injected test double has no process group.
+      }
+    }
+    try {
+      proc.kill(signal);
+    } catch {
+      // The process may already be gone.
+    }
+  }
+
   private modelLoadingProgressText(text: string): string | null {
     const trimmed = text.trim();
     if (!trimmed.includes("%")) return null;
@@ -144,6 +160,7 @@ export class ProcessManager extends EventEmitter {
           cwd: this.cwd,
           env: { ...process.env, ...this.env },
           stdio: ["ignore", "pipe", "pipe"],
+          detached: true,
         });
       } catch (err) {
         reject(new ProcessStartError(kind, `Could not launch “${trimmed}”: ${(err as Error).message}`, "Check that the path is correct and executable."));
@@ -287,17 +304,13 @@ export class ProcessManager extends EventEmitter {
         finish({ kind, state: "exited", pid: managed.pid, exitCode: code, startedAt: managed.startedAt, endedAt: Date.now() });
       });
       try {
-        proc.kill("SIGTERM");
+        this.signalProcess(proc, "SIGTERM");
       } catch {
         finish({ kind, state: "exited", pid: managed.pid, exitCode: managed.exitCode, startedAt: managed.startedAt, endedAt: Date.now() });
       }
       const timer = setTimeout(() => {
         if (!resolved && proc.exitCode === null) {
-          try {
-            proc.kill("SIGKILL");
-          } catch {
-            // ignore
-          }
+          this.signalProcess(proc, "SIGKILL");
         }
       }, GRACEFUL_TIMEOUT_MS);
     });

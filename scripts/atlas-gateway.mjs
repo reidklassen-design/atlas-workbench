@@ -45,6 +45,70 @@ function estimateBody(body) {
   return estimateTokens(parts.join("\n"));
 }
 
+function structuredJsonOutputRequested(body) {
+  if (body.response_format && typeof body.response_format === "object") {
+    const text = JSON.stringify(body.response_format).toLowerCase();
+    if (text.includes("json_object") || text.includes("json_schema") || text.includes('"json"')) return true;
+  }
+  const parts = [];
+  if (Array.isArray(body.messages)) {
+    for (const message of body.messages) parts.push(textFromContent(message?.content));
+  }
+  if (typeof body.prompt === "string") parts.push(body.prompt);
+  const text = parts.join("\n").toLowerCase();
+  return text.includes("json") && (
+    text.includes("return only")
+    || text.includes("strict json")
+    || text.includes("valid json")
+    || text.includes("json object")
+    || text.includes("json blueprint")
+    || text.includes("no markdown")
+    || text.includes("no explanation")
+  );
+}
+
+function normalizeOpenAiRequestForGateway(body) {
+  if (!structuredJsonOutputRequested(body)) return { body, structuredOutput: false };
+  const next = JSON.parse(JSON.stringify(body));
+  const kwargs = next.chat_template_kwargs && typeof next.chat_template_kwargs === "object" && !Array.isArray(next.chat_template_kwargs)
+    ? next.chat_template_kwargs
+    : {};
+  kwargs.enable_thinking = false;
+  next.chat_template_kwargs = kwargs;
+  return { body: next, structuredOutput: true };
+}
+
+function withConfiguredSystemPrompt(body, config) {
+  const prompt = String(config.systemPrompt ?? "").trim();
+  if (!prompt || !Array.isArray(body.messages)) return body;
+  const next = JSON.parse(JSON.stringify(body));
+  next.messages = [{ role: "system", content: prompt }, ...next.messages];
+  return next;
+}
+
+function structuredEmptyContentError(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
+  const reasoningOnly = choices.some((choice) => {
+    const message = choice?.message;
+    return message
+      && String(message.content ?? "").trim() === ""
+      && String(message.reasoning_content ?? "").trim() !== "";
+  });
+  if (!reasoningOnly) return null;
+  return {
+    error: {
+      type: "atlas_structured_empty_content",
+      message: "Atlas blocked an upstream reasoning-only response: the model returned hidden reasoning_content but empty final message.content for a structured JSON request. Atlas should disable thinking for structured output; retry the request.",
+    },
+  };
+}
+
 function activeProfile(config) {
   const runtime = config.agentRuntime ?? {};
   const id = runtime.activeProfileId;
@@ -154,7 +218,7 @@ function isAuthorized(req, config) {
   return !apiKey || requestToken(req) === apiKey;
 }
 
-async function proxy(req, res, config, path, body) {
+async function proxy(req, res, config, path, body, options = {}) {
   const upstreamHost = clientHost(config.server?.host);
   const upstreamPort = Number(config.server?.port ?? DEFAULT_UPSTREAM_PORT);
   const upstream = await fetch(`http://${upstreamHost}:${upstreamPort}${path}`, {
@@ -165,6 +229,17 @@ async function proxy(req, res, config, path, body) {
     },
     body: req.method === "GET" || req.method === "HEAD" ? undefined : body,
   });
+  if (options.structuredOutput) {
+    const text = await upstream.text();
+    const emptyContentError = structuredEmptyContentError(text);
+    if (upstream.status >= 200 && upstream.status < 300 && emptyContentError) {
+      sendJson(res, 502, emptyContentError);
+      return;
+    }
+    res.writeHead(upstream.status, { ...Object.fromEntries(upstream.headers.entries()), "content-length": Buffer.byteLength(text) });
+    res.end(text);
+    return;
+  }
   res.writeHead(upstream.status, Object.fromEntries(upstream.headers.entries()));
   if (!upstream.body) {
     res.end();
@@ -226,11 +301,13 @@ function start() {
         requestCount += 1;
         const raw = await readBody(req);
         const body = JSON.parse(raw);
+        const withSystemPrompt = path === "/v1/chat/completions" ? withConfiguredSystemPrompt(body, config) : body;
+        const normalized = normalizeOpenAiRequestForGateway(withSystemPrompt);
         const maxPrompt = maxPromptTokens(config);
-        const estimate = estimateBody(body);
-        let forwarded = raw;
+        const estimate = estimateBody(normalized.body);
+        let forwarded = JSON.stringify(normalized.body);
         if (estimate > maxPrompt) {
-          const compressed = compressBody(body, maxPrompt);
+          const compressed = compressBody(normalized.body, maxPrompt);
           if (compressed.compressed && compressed.after <= maxPrompt) {
             compressedCount += 1;
             forwarded = JSON.stringify(compressed.body);
@@ -245,7 +322,7 @@ function start() {
             return;
           }
         }
-        await proxy(req, res, config, path, forwarded);
+        await proxy(req, res, config, path, forwarded, { structuredOutput: normalized.structuredOutput });
         return;
       }
       sendJson(res, 404, { error: { type: "not_found", message: `Atlas Gateway route not found: ${path}` } });

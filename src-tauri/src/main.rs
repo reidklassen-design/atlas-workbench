@@ -3,10 +3,11 @@ use serde_json::{json, Value};
 use std::{
     backtrace::Backtrace,
     collections::{HashMap, HashSet},
+    env,
     fs,
     io::{Read, Write},
     net::{TcpListener, TcpStream, ToSocketAddrs},
-    os::unix::fs::PermissionsExt,
+    os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{mpsc, Arc, Mutex},
@@ -20,7 +21,8 @@ use uuid::Uuid;
 const SERVER_READY_TIMEOUT_SECS: u64 = 600;
 const HEALTH_PROGRESS_LOG_SECS: u64 = 5;
 const PROCESS_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
-const OPTIMIZED_PROFILE_VERSION: i64 = 5;
+const OPTIMIZED_PROFILE_VERSION: i64 = 9;
+const VISUAL_LOCATOR_KIND: &str = "visual-locator";
 
 #[derive(Default)]
 struct AppState {
@@ -133,15 +135,15 @@ fn default_config() -> Value {
     json!({
         "schemaVersion": 1,
         "binaryPaths": { "server": "/home/reid/.local/bin/llama-server", "finetune": "/home/reid/.local/bin/llama-finetune" },
-        "gpu": { "autoOffloadInitialized": false, "optimizedProfileVersion": OPTIMIZED_PROFILE_VERSION, "offloadMode": "auto" },
+        "gpu": { "autoOffloadInitialized": false, "optimizedProfileVersion": OPTIMIZED_PROFILE_VERSION, "offloadMode": "full" },
         "model": {
-            "directory": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF",
-            "selectedModel": "/home/reid/.lmstudio/models/deepreinforce-ai/Ornith-1.0-35B-GGUF/ornith-1.0-35b-Q4_K_M.gguf"
+            "directory": "/home/reid/Downloads",
+            "selectedModel": "/home/reid/Downloads/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf"
         },
         "server": { "host": "127.0.0.1", "port": 8099 },
         "serverFlags": {
-            "alias": "Ornith1",
-            "ctx-size": 98304,
+            "alias": "Qwen3-Coder-30B-A3B",
+            "ctx-size": 188000,
             "n-gpu-layers": 999,
             "threads": 16,
             "threads-batch": 16,
@@ -153,14 +155,15 @@ fn default_config() -> Value {
             "metrics": true,
             "context-shift": true,
             "predict": 8192,
-            "reasoning": "auto",
-            "reasoning-budget": -1,
-            "temp": 0.8,
-            "top-k": 40,
-            "top-p": 0.95,
+            "reasoning": "off",
+            "reasoning-budget": 0,
+            "temp": 0.2,
+            "top-k": 20,
+            "top-p": 0.8,
+            "repeat-penalty": 1.05,
             "flash-attn": "on",
-            "cache-type-k": "q8_0",
-            "cache-type-v": "q8_0",
+            "cache-type-k": "q4_0",
+            "cache-type-v": "q4_0",
             "mlock": false,
             "no-mmap": false
         },
@@ -238,6 +241,105 @@ fn profile_flags(overrides: Value) -> Value {
 
 fn default_agent_runtime_profiles() -> Value {
     json!([
+        {
+            "id": "3090-ti-qwen3-coder-30b-a3b-q4-xl-188k-full-gpu",
+            "name": "3090 Ti Qwen3-Coder 30B 188K Full-GPU",
+            "role": "main-coding",
+            "description": "Default DarkFactory coder: measured highest all-GPU context on the 3090 Ti with Qwen3-Coder Q4 XL, q4 KV cache, and fast 1024/256 batching.",
+            "modelDirectory": "/home/reid/Downloads",
+            "modelPath": "/home/reid/Downloads/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf",
+            "gpuOffloadMode": "full",
+            "serverFlagOverrides": profile_flags(json!({
+                "alias": "Qwen3-Coder-30B-A3B",
+                "ctx-size": 188000,
+                "parallel": 1,
+                "batch-size": 1024,
+                "ubatch-size": 256,
+                "flash-attn": "on",
+                "cache-type-k": "q4_0",
+                "cache-type-v": "q4_0",
+                "cont-batching": true,
+                "slots": true,
+                "metrics": true,
+                "context-shift": true,
+                "predict": 8192,
+                "reasoning": "off",
+                "reasoning-budget": 0,
+                "temp": 0.2,
+                "top-k": 20,
+                "top-p": 0.8,
+                "repeat-penalty": 1.05,
+                "threads": 16,
+                "threads-batch": 16
+            })),
+            "requestPolicy": agent_request_policy(188000, 8192, 40000, 28000, "reject")
+        },
+        {
+            "id": "3090-ti-qwen3-coder-30b-a3b-q4-xl-262k-max-context",
+            "name": "3090 Ti Qwen3-Coder 30B 262K Max Context",
+            "role": "main-coding",
+            "description": "Maximum-context Qwen3-Coder profile for giant repo reads. It reaches the native 262K window by letting llama.cpp auto-fit and spill some tensors to CPU.",
+            "modelDirectory": "/home/reid/Downloads",
+            "modelPath": "/home/reid/Downloads/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf",
+            "gpuOffloadMode": "auto",
+            "serverFlagOverrides": profile_flags(json!({
+                "alias": "Qwen3-Coder-30B-A3B",
+                "ctx-size": 262144,
+                "parallel": 1,
+                "batch-size": 1024,
+                "ubatch-size": 256,
+                "flash-attn": "on",
+                "cache-type-k": "q4_0",
+                "cache-type-v": "q4_0",
+                "cont-batching": true,
+                "slots": true,
+                "metrics": true,
+                "context-shift": true,
+                "predict": 8192,
+                "reasoning": "off",
+                "reasoning-budget": 0,
+                "temp": 0.2,
+                "top-k": 20,
+                "top-p": 0.8,
+                "repeat-penalty": 1.05,
+                "threads": 16,
+                "threads-batch": 16
+            })),
+            "requestPolicy": agent_request_policy(262144, 8192, 48000, 32000, "reject")
+        },
+        {
+            "id": "3090-ti-qwen3-coder-30b-a3b-q4-xl-131k-headroom",
+            "name": "3090 Ti Qwen3-Coder 30B 131K GPU Headroom",
+            "role": "main-coding",
+            "description": "All-GPU Qwen3-Coder profile with extra VRAM margin. Use it when you want the same coder but less pressure on the desktop or sidecar tools.",
+            "modelDirectory": "/home/reid/Downloads",
+            "modelPath": "/home/reid/Downloads/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf",
+            "gpuOffloadMode": "full",
+            "serverFlagOverrides": profile_flags(json!({
+                "alias": "Qwen3-Coder-30B-A3B",
+                "ctx-size": 131072,
+                "parallel": 1,
+                "batch-size": 1024,
+                "ubatch-size": 256,
+                "flash-attn": "on",
+                "cache-type-k": "q4_0",
+                "cache-type-v": "q4_0",
+                "cont-batching": true,
+                "slots": true,
+                "metrics": true,
+                "context-shift": true,
+                "predict": 8192,
+                "reasoning": "off",
+                "reasoning-budget": 0,
+                "temp": 0.2,
+                "top-k": 20,
+                "top-p": 0.8,
+                "repeat-penalty": 1.05,
+                "threads": 16,
+                "threads-batch": 16
+            })),
+            "requestPolicy": agent_request_policy(131072, 8192, 32000, 24000, "reject")
+        },
         {
             "id": "3090-ti-ornith-35b-96k-always-on",
             "name": "3090 Ti Ornith 35B 96K Always-On",
@@ -359,6 +461,7 @@ fn default_agent_runtime_profiles() -> Value {
             "modelPath": "/home/reid/Downloads/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
             "gpuOffloadMode": "cpu",
             "serverFlagOverrides": profile_flags(json!({
+                "alias": "Qwen2.5-3B-compress",
                 "ctx-size": 32768,
                 "parallel": 1,
                 "batch-size": 256,
@@ -381,6 +484,7 @@ fn default_agent_runtime_profiles() -> Value {
             "description": "Fallback profile for recovering after VRAM pressure, repeated stalls, or driver instability.",
             "gpuOffloadMode": "auto",
             "serverFlagOverrides": profile_flags(json!({
+                "alias": "Qwythos-9B-rescue",
                 "ctx-size": 32768,
                 "parallel": 1,
                 "batch-size": 256,
@@ -399,14 +503,27 @@ fn default_agent_runtime_profiles() -> Value {
 
 fn default_agent_runtime_config() -> Value {
     json!({
-        "activeProfileId": "3090-ti-ornith-35b-96k-always-on",
+        "activeProfileId": "3090-ti-qwen3-coder-30b-a3b-q4-xl-188k-full-gpu",
         "gateway": {
             "enabled": false,
             "host": "0.0.0.0",
             "port": 18080,
             "apiKey": "atlas-local",
-            "modelAlias": "atlas/3090-ti-ornith-35b-96k-always-on",
+            "modelAlias": "Qwen3-Coder-30B-A3B",
             "autoCompressionEnabled": true
+        },
+        "visualLocator": {
+            "enabled": true,
+            "host": "127.0.0.1",
+            "port": 8000,
+            "apiKey": "local",
+            "modelAlias": "nvidia/LocateAnything-3B",
+            "serverPath": "/home/reid/.local/share/darkfactory/locateanything/bin/llama-server",
+            "modelPath": "/home/reid/DarkFactoryModels/LocateAnything-3B-GGUF/LocateAnything-3B-Q4_K_M.gguf",
+            "mmprojPath": "/home/reid/DarkFactoryModels/LocateAnything-3B-GGUF/mmproj-LocateAnything-3B-BF16.gguf",
+            "gpuLayers": "all",
+            "contextSize": 4096,
+            "autoStartWithGateway": false
         },
         "profiles": default_agent_runtime_profiles()
     })
@@ -446,7 +563,7 @@ fn load_config_value() -> Result<Value, AppError> {
     let profile_version = value_at(&config, &["gpu", "optimizedProfileVersion"]).and_then(Value::as_i64).unwrap_or(0);
     if profile_version < 1 && collect_gpu().get("detected").and_then(Value::as_bool).unwrap_or(false) {
         if let Some(flags) = config.get_mut("serverFlags").and_then(Value::as_object_mut) {
-            flags.insert("alias".to_string(), json!("Ornith1"));
+            flags.insert("alias".to_string(), json!("Qwythos-9B"));
             flags.insert("ctx-size".to_string(), json!(98304));
             flags.insert("n-gpu-layers".to_string(), json!(999));
             flags.insert("flash-attn".to_string(), json!("on"));
@@ -474,12 +591,12 @@ fn load_config_value() -> Result<Value, AppError> {
     let profile_version = value_at(&config, &["gpu", "optimizedProfileVersion"]).and_then(Value::as_i64).unwrap_or(0);
     if profile_version < OPTIMIZED_PROFILE_VERSION && collect_gpu().get("detected").and_then(Value::as_bool).unwrap_or(false) {
         if let Some(flags) = config.get_mut("serverFlags").and_then(Value::as_object_mut) {
-            flags.insert("alias".to_string(), json!("Ornith1"));
-            flags.insert("ctx-size".to_string(), json!(98304));
+            flags.insert("alias".to_string(), json!("Qwen3-Coder-30B-A3B"));
+            flags.insert("ctx-size".to_string(), json!(188000));
             flags.insert("n-gpu-layers".to_string(), json!(999));
             flags.insert("flash-attn".to_string(), json!("on"));
-            flags.insert("cache-type-k".to_string(), json!("q8_0"));
-            flags.insert("cache-type-v".to_string(), json!("q8_0"));
+            flags.insert("cache-type-k".to_string(), json!("q4_0"));
+            flags.insert("cache-type-v".to_string(), json!("q4_0"));
             flags.insert("threads".to_string(), json!(16));
             flags.insert("threads-batch".to_string(), json!(16));
             flags.insert("parallel".to_string(), json!(1));
@@ -492,15 +609,24 @@ fn load_config_value() -> Result<Value, AppError> {
             flags.insert("predict".to_string(), json!(8192));
             flags.insert("reasoning".to_string(), json!("off"));
             flags.insert("reasoning-budget".to_string(), json!(0));
+            flags.insert("temp".to_string(), json!(0.2));
+            flags.insert("top-k".to_string(), json!(20));
+            flags.insert("top-p".to_string(), json!(0.8));
+            flags.insert("repeat-penalty".to_string(), json!(1.05));
         }
         if let Some(runtime) = config.get_mut("agentRuntime").and_then(Value::as_object_mut) {
-            runtime.insert("activeProfileId".to_string(), json!("3090-ti-ornith-35b-96k-always-on"));
+            runtime.insert("activeProfileId".to_string(), json!("3090-ti-qwen3-coder-30b-a3b-q4-xl-188k-full-gpu"));
             runtime.insert("profiles".to_string(), default_agent_runtime_profiles());
             if let Some(gateway) = runtime.get_mut("gateway").and_then(Value::as_object_mut) {
                 gateway.insert("host".to_string(), json!("0.0.0.0"));
-                gateway.insert("modelAlias".to_string(), json!("atlas/3090-ti-ornith-35b-96k-always-on"));
+                gateway.insert("modelAlias".to_string(), json!("Qwen3-Coder-30B-A3B"));
                 gateway.insert("autoCompressionEnabled".to_string(), json!(true));
             }
+            runtime.entry("visualLocator".to_string()).or_insert_with(|| default_agent_runtime_config().get("visualLocator").cloned().unwrap_or_else(|| json!({})));
+        }
+        if let Some(model) = config.get_mut("model").and_then(Value::as_object_mut) {
+            model.insert("directory".to_string(), json!("/home/reid/Downloads"));
+            model.insert("selectedModel".to_string(), json!("/home/reid/Downloads/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf"));
         }
         if let Some(server) = config.get_mut("server").and_then(Value::as_object_mut) {
             server.insert("host".to_string(), json!("127.0.0.1"));
@@ -508,7 +634,7 @@ fn load_config_value() -> Result<Value, AppError> {
         }
         if let Some(gpu) = config.get_mut("gpu").and_then(Value::as_object_mut) {
             gpu.insert("optimizedProfileVersion".to_string(), json!(OPTIMIZED_PROFILE_VERSION));
-            gpu.insert("offloadMode".to_string(), json!("auto"));
+            gpu.insert("offloadMode".to_string(), json!("full"));
         }
         save_config_value(&config)?;
     }
@@ -763,7 +889,7 @@ fn always_emit_server_flag(id: &str) -> bool {
 fn server_default_value(id: &str) -> Option<Value> {
     Some(match id {
         "api-key" | "device" | "tensor-split" | "path" | "draft-model" | "logit-bias" | "chat-template" | "chat-template-file" | "grammar" | "grammar-file" | "lora" | "lora-scaled" | "control-vector" | "ssl-key-file" | "ssl-cert-file" | "override-tensor" => json!(""),
-        "alias" => json!("Ornith1"),
+        "alias" => json!("Qwen3-Coder-30B-A3B"),
         "parallel" => json!(1),
         "cont-batching" | "slots" | "webui" | "log-prefix" | "warmup" => json!(true),
         "metrics" | "context-shift" => json!(true),
@@ -776,22 +902,23 @@ fn server_default_value(id: &str) -> Option<Value> {
         "draft-max" => json!(16),
         "draft-min" => json!(5),
         "draft-p-min" => json!(0.9),
-        "ctx-size" => json!(98304),
+        "ctx-size" => json!(188000),
         "batch-size" => json!(1024),
         "ubatch-size" => json!(256),
         "keep" => json!(0),
         "threads" | "threads-batch" => json!(16),
         "predict" => json!(8192),
-        "top-nsigma" | "reasoning-budget" | "embd-normalize" => json!(-1),
-        "cache-type-k" | "cache-type-v" => json!("q8_0"),
+        "top-nsigma" | "embd-normalize" => json!(-1),
+        "reasoning-budget" => json!(0),
+        "cache-type-k" | "cache-type-v" => json!("q4_0"),
         "defrag-thold" => json!(0.1),
         "cache-reuse" => json!(0),
-        "temp" => json!(0.8),
-        "top-k" => json!(40),
-        "top-p" => json!(0.95),
+        "temp" => json!(0.2),
+        "top-k" => json!(20),
+        "top-p" => json!(0.8),
         "min-p" => json!(0.05),
         "typical-p" => json!(1.0),
-        "repeat-penalty" => json!(1.1),
+        "repeat-penalty" => json!(1.05),
         "repeat-last-n" => json!(64),
         "presence-penalty" | "frequency-penalty" | "dynatemp-range" | "xtc-probability" => json!(0),
         "mirostat" => json!("0"),
@@ -802,7 +929,7 @@ fn server_default_value(id: &str) -> Option<Value> {
         "samplers" => json!("top_k;typ_p;top_p;min_p;temperature"),
         "seed" => json!(-1),
         "jinja" => json!(false),
-        "reasoning" => json!("auto"),
+        "reasoning" => json!("off"),
         "reasoning-format" => json!("deepseek"),
         "escape" => json!(false),
         "rope-scaling" => json!("none"),
@@ -1174,8 +1301,7 @@ fn kill_child_from_children(app: &AppHandle, children: &Arc<Mutex<HashMap<String
     if let Ok(mut map) = children.lock() {
         if let Some(mut child) = map.remove(kind) {
             let pid = child.id();
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_managed_child(&mut child);
             let status = json!({ "kind": kind, "state": "exited", "pid": pid, "exitCode": null, "endedAt": now() });
             let _ = app.emit("status", status);
         }
@@ -1187,9 +1313,27 @@ fn kill_all_managed_children(children: &Arc<Mutex<HashMap<String, Child>>>) {
         return;
     };
     for (_, mut child) in map.drain() {
-        let _ = child.kill();
-        let _ = child.wait();
+        terminate_managed_child(&mut child);
     }
+}
+
+fn signal_process_group(pid: u32, signal: &str) {
+    let _ = Command::new("kill").args([format!("-{}", signal), "--".to_string(), format!("-{}", pid)]).status();
+}
+
+fn terminate_managed_child(child: &mut Child) {
+    let pid = child.id();
+    signal_process_group(pid, "TERM");
+    let _ = child.kill();
+    for _ in 0..50 {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    signal_process_group(pid, "KILL");
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn spawn_exit_watcher(app: AppHandle, children: Arc<Mutex<HashMap<String, Child>>>, tails: Arc<Mutex<HashMap<String, Vec<String>>>>, kind: &'static str, pid: u32) {
@@ -1238,6 +1382,10 @@ fn spawn_exit_watcher(app: AppHandle, children: Arc<Mutex<HashMap<String, Child>
 }
 
 fn start_child(app: AppHandle, state: &State<AppState>, kind: &'static str, binary: String, args: Vec<String>) -> Result<Value, AppError> {
+    start_child_with_env(app, state, kind, binary, args, Vec::new())
+}
+
+fn start_child_with_env(app: AppHandle, state: &State<AppState>, kind: &'static str, binary: String, args: Vec<String>, envs: Vec<(String, String)>) -> Result<Value, AppError> {
     if state.children.lock().map_err(|_| app_error(kind, "Process state unavailable", "Could not lock the process table.", "Restart Atlas Workbench and try again."))?.contains_key(kind) {
         return Err(app_error(kind, "Process is already running", format!("A {} process is already running.", kind), "Stop the running process before starting another one."));
     }
@@ -1246,10 +1394,16 @@ fn start_child(app: AppHandle, state: &State<AppState>, kind: &'static str, bina
         tails.remove(kind);
     }
     emit_log(&app, kind, "stdout", format!("Launching: {} {}", shell_quote(&resolved.to_string_lossy()), redacted_args(&args)));
-    let mut child = Command::new(&resolved)
+    let mut command = Command::new(&resolved);
+    command
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let mut child = command
         .spawn()
         .map_err(|e| app_error(kind, "Could not launch process", e.to_string(), "Check the binary path and permissions, then try again."))?;
     let pid = child.id();
@@ -1612,7 +1766,13 @@ fn runtime_apply_profile(profile_id: String) -> Result<Value, AppError> {
     if let Some(runtime) = config.get_mut("agentRuntime").and_then(Value::as_object_mut) {
         runtime.insert("activeProfileId".to_string(), json!(resolved_id.clone()));
         if let Some(gateway) = runtime.get_mut("gateway").and_then(Value::as_object_mut) {
-            gateway.insert("modelAlias".to_string(), json!(format!("atlas/{}", resolved_id)));
+            let model_alias = profile
+                .get("serverFlagOverrides")
+                .and_then(|flags| flags.get("alias"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("atlas/{}", resolved_id));
+            gateway.insert("modelAlias".to_string(), json!(model_alias));
         }
     }
     save_config_value(&config)?;
@@ -1693,6 +1853,69 @@ fn estimate_openai_prompt_tokens(body: &Value) -> i64 {
     estimate_tokens(&text)
 }
 
+fn structured_json_output_requested(body: &Value) -> bool {
+    if let Some(response_format) = body.get("response_format") {
+        let text = response_format.to_string().to_ascii_lowercase();
+        if text.contains("json_object") || text.contains("json_schema") || text.contains("\"json\"") {
+            return true;
+        }
+    }
+
+    let mut text = String::new();
+    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+        for message in messages {
+            if let Some(content) = message.get("content") {
+                text.push_str(&text_from_json(content));
+                text.push('\n');
+            }
+        }
+    }
+    if let Some(prompt) = body.get("prompt").and_then(Value::as_str) {
+        text.push_str(prompt);
+    }
+    let lower = text.to_ascii_lowercase();
+    lower.contains("json")
+        && (
+            lower.contains("return only")
+            || lower.contains("strict json")
+            || lower.contains("valid json")
+            || lower.contains("json object")
+            || lower.contains("json blueprint")
+            || lower.contains("no markdown")
+            || lower.contains("no explanation")
+        )
+}
+
+fn with_configured_system_prompt(mut body: Value, config: &Value) -> Value {
+    let prompt = string_at(config, &["systemPrompt"]);
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return body;
+    }
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return body;
+    };
+    messages.insert(0, json!({ "role": "system", "content": prompt }));
+    body
+}
+
+fn normalize_openai_request_for_gateway(mut body: Value) -> (Value, bool) {
+    let structured = structured_json_output_requested(&body);
+    if !structured {
+        return (body, false);
+    }
+    if let Some(obj) = body.as_object_mut() {
+        let kwargs = obj.entry("chat_template_kwargs".to_string()).or_insert_with(|| json!({}));
+        if !kwargs.is_object() {
+            *kwargs = json!({});
+        }
+        if let Some(map) = kwargs.as_object_mut() {
+            map.insert("enable_thinking".to_string(), json!(false));
+        }
+    }
+    (body, true)
+}
+
 fn truncate_for_token_budget(text: &str, target_tokens: i64) -> String {
     if estimate_tokens(text) <= target_tokens {
         return text.to_string();
@@ -1750,6 +1973,28 @@ fn compress_openai_request(mut body: Value, max_prompt_tokens: i64) -> (Value, b
 
     let after = estimate_openai_prompt_tokens(&body);
     (body, compressed, before, after)
+}
+
+fn structured_empty_content_error(response_body: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_str(response_body).ok()?;
+    let choices = parsed.get("choices").and_then(Value::as_array)?;
+    let has_reasoning_only_choice = choices.iter().any(|choice| {
+        let Some(message) = choice.get("message").and_then(Value::as_object) else {
+            return false;
+        };
+        let content = message.get("content").and_then(Value::as_str).unwrap_or("").trim();
+        let reasoning = message.get("reasoning_content").and_then(Value::as_str).unwrap_or("").trim();
+        content.is_empty() && !reasoning.is_empty()
+    });
+    if !has_reasoning_only_choice {
+        return None;
+    }
+    Some(json!({
+        "error": {
+            "message": "Atlas blocked an upstream reasoning-only response: the model returned hidden reasoning_content but empty final message.content for a structured JSON request. Atlas should disable thinking for structured output; retry the request.",
+            "type": "atlas_structured_empty_content"
+        }
+    }).to_string())
 }
 
 fn active_profile(config: &Value) -> Option<Value> {
@@ -1968,9 +2213,15 @@ fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128
             } else if method == "POST" && (path == "/v1/chat/completions" || path == "/v1/completions") {
                 match serde_json::from_slice::<Value>(&body) {
                     Ok(parsed) => {
-                        let estimated = estimate_openai_prompt_tokens(&parsed);
+                        let with_system_prompt = if path == "/v1/chat/completions" {
+                            with_configured_system_prompt(parsed, config)
+                        } else {
+                            parsed
+                        };
+                        let (forward_body, structured_output) = normalize_openai_request_for_gateway(with_system_prompt);
+                        let estimated = estimate_openai_prompt_tokens(&forward_body);
                         let max_prompt = active_max_prompt_tokens(config);
-                        let requested_output = requested_output_tokens(&parsed);
+                        let requested_output = requested_output_tokens(&forward_body);
                         let content_type = headers.get("content-type").map(String::as_str).unwrap_or("application/json");
                         update_gateway_stats(&stats, |current| {
                             current.last_budget = Some(gateway_budget_value(
@@ -1987,7 +2238,7 @@ fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128
                                 update_gateway_stats(&stats, |current| {
                                     current.compaction_active = true;
                                 });
-                                let (compressed_body, compressed, before, after) = compress_openai_request(parsed, max_prompt);
+                                let (compressed_body, compressed, before, after) = compress_openai_request(forward_body, max_prompt);
                                 update_gateway_stats(&stats, |current| {
                                     current.last_budget = Some(gateway_budget_value(
                                         compressed && after <= max_prompt,
@@ -2010,7 +2261,20 @@ fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128
                                     });
                                     match serde_json::to_vec(&compressed_body) {
                                         Ok(body) => match proxy_http_request(config, "POST", &path, &body, content_type) {
-                                            Ok((status, content_type, body)) => http_response(status, &content_type, &body),
+                                            Ok((status, content_type, body)) => {
+                                                if structured_output && (200..300).contains(&status) {
+                                                    if let Some(error_body) = structured_empty_content_error(&body) {
+                                                        update_gateway_stats(&stats, |current| {
+                                                            current.last_error = Some("Upstream returned reasoning-only structured output.".to_string());
+                                                        });
+                                                        http_response(502, "application/json", &error_body)
+                                                    } else {
+                                                        http_response(status, &content_type, &body)
+                                                    }
+                                                } else {
+                                                    http_response(status, &content_type, &body)
+                                                }
+                                            }
                                             Err(err) => {
                                                 update_gateway_stats(&stats, |current| {
                                                     current.last_error = Some(err.clone());
@@ -2060,13 +2324,34 @@ fn handle_gateway_stream(mut stream: TcpStream, config: &Value, started_at: u128
                                 )
                             }
                         } else {
-                            match proxy_http_request(config, "POST", &path, &body, content_type) {
-                                Ok((status, content_type, body)) => http_response(status, &content_type, &body),
+                            match serde_json::to_vec(&forward_body) {
+                                Ok(body) => match proxy_http_request(config, "POST", &path, &body, content_type) {
+                                    Ok((status, content_type, body)) => {
+                                        if structured_output && (200..300).contains(&status) {
+                                            if let Some(error_body) = structured_empty_content_error(&body) {
+                                                update_gateway_stats(&stats, |current| {
+                                                    current.last_error = Some("Upstream returned reasoning-only structured output.".to_string());
+                                                });
+                                                http_response(502, "application/json", &error_body)
+                                            } else {
+                                                http_response(status, &content_type, &body)
+                                            }
+                                        } else {
+                                            http_response(status, &content_type, &body)
+                                        }
+                                    }
+                                    Err(err) => {
+                                        update_gateway_stats(&stats, |current| {
+                                            current.last_error = Some(err.clone());
+                                        });
+                                        http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string())
+                                    }
+                                },
                                 Err(err) => {
                                     update_gateway_stats(&stats, |current| {
-                                        current.last_error = Some(err.clone());
+                                        current.last_error = Some(err.to_string());
                                     });
-                                    http_response(502, "application/json", &json!({ "error": { "message": err, "type": "atlas_gateway_upstream_error" } }).to_string())
+                                    http_response(502, "application/json", &json!({ "error": { "message": err.to_string(), "type": "atlas_gateway_request_normalization_error" } }).to_string())
                                 }
                             }
                         }
@@ -2202,6 +2487,144 @@ fn gateway_status(state: State<AppState>) -> Result<Value, AppError> {
         status = external_gateway_status(&config);
     }
     Ok(status)
+}
+
+fn visual_locator_host(config: &Value) -> String {
+    let host = string_at(config, &["agentRuntime", "visualLocator", "host"]);
+    if host.trim().is_empty() { "127.0.0.1".to_string() } else { host }
+}
+
+fn visual_locator_port(config: &Value) -> i64 {
+    number_at(config, &["agentRuntime", "visualLocator", "port"], 8000)
+}
+
+fn visual_locator_status_value(config: &Value, running: bool, external: bool, pid: Option<usize>, cmdline: Option<String>) -> Value {
+    let host = visual_locator_host(config);
+    let port = visual_locator_port(config);
+    json!({
+        "running": running,
+        "external": external,
+        "state": if running { "running" } else { "stopped" },
+        "pid": pid,
+        "host": host,
+        "port": port,
+        "endpoint": format!("http://{}:{}/v1", client_host_for(&host), port),
+        "modelAlias": string_at(config, &["agentRuntime", "visualLocator", "modelAlias"]),
+        "serverPath": string_at(config, &["agentRuntime", "visualLocator", "serverPath"]),
+        "modelPath": string_at(config, &["agentRuntime", "visualLocator", "modelPath"]),
+        "mmprojPath": string_at(config, &["agentRuntime", "visualLocator", "mmprojPath"]),
+        "gpuLayers": string_at(config, &["agentRuntime", "visualLocator", "gpuLayers"]),
+        "contextSize": number_at(config, &["agentRuntime", "visualLocator", "contextSize"], 4096),
+        "apiKey": string_at(config, &["agentRuntime", "visualLocator", "apiKey"]),
+        "cmdline": cmdline
+    })
+}
+
+fn managed_child_pid(state: &State<AppState>, kind: &str) -> Result<Option<usize>, AppError> {
+    let children = state.children.lock().map_err(|_| app_error(kind, "Process state unavailable", "Could not lock process state.", "Restart Atlas Workbench and try again."))?;
+    Ok(children.get(kind).map(|child| child.id() as usize))
+}
+
+fn external_visual_locator(config: &Value) -> Option<(usize, String)> {
+    let port = visual_locator_port(config);
+    let model_alias = string_at(config, &["agentRuntime", "visualLocator", "modelAlias"]);
+    let model_path = string_at(config, &["agentRuntime", "visualLocator", "modelPath"]);
+    processes_matching_port(port)
+        .into_iter()
+        .find(|(_, cmdline)| {
+            (!model_alias.is_empty() && cmdline.contains(&model_alias))
+                || (!model_path.is_empty() && cmdline.contains(&model_path))
+                || cmdline.contains("LocateAnything")
+                || cmdline.contains("mmproj")
+        })
+}
+
+#[tauri::command]
+fn visual_locator_status(state: State<AppState>) -> Result<Value, AppError> {
+    let config = load_config_value()?;
+    if let Some(pid) = managed_child_pid(&state, VISUAL_LOCATOR_KIND)? {
+        return Ok(visual_locator_status_value(&config, true, false, Some(pid), None));
+    }
+    if let Some((pid, cmdline)) = external_visual_locator(&config) {
+        return Ok(visual_locator_status_value(&config, true, true, Some(pid), Some(cmdline)));
+    }
+    Ok(visual_locator_status_value(&config, false, false, None, None))
+}
+
+fn visual_locator_launch(config: &Value) -> Result<(String, Vec<String>, Vec<(String, String)>), AppError> {
+    let enabled = value_at(config, &["agentRuntime", "visualLocator", "enabled"]).and_then(Value::as_bool).unwrap_or(true);
+    if !enabled {
+        return Err(app_error("visual-locator", "Visual locator is disabled", "Atlas visual locator sidecar is disabled in Agent Runtime settings.", "Enable the visual locator sidecar, then start it again."));
+    }
+    let server = string_at(config, &["agentRuntime", "visualLocator", "serverPath"]);
+    let model = string_at(config, &["agentRuntime", "visualLocator", "modelPath"]);
+    let mmproj = string_at(config, &["agentRuntime", "visualLocator", "mmprojPath"]);
+    if !Path::new(&model).is_file() {
+        return Err(app_error("visual-locator", "Visual locator model not found", format!("The LocateAnything GGUF was not found at {}.", model), "Choose a valid LocateAnything GGUF path or reinstall the local visual locator files."));
+    }
+    if !Path::new(&mmproj).is_file() {
+        return Err(app_error("visual-locator", "Visual locator mmproj not found", format!("The LocateAnything mmproj was not found at {}.", mmproj), "Choose a valid mmproj path or reinstall the local visual locator files."));
+    }
+    let resolved = resolve_binary_path(&server, "server").map_err(|message| app_error("visual-locator", "Visual locator server is not runnable", message, "Point the visual locator server path at the LocateAnything-compatible llama-server binary."))?;
+    let host = visual_locator_host(config);
+    let port = visual_locator_port(config);
+    let gpu_layers = {
+        let value = string_at(config, &["agentRuntime", "visualLocator", "gpuLayers"]);
+        if value.trim().is_empty() { "all".to_string() } else { value }
+    };
+    let model_alias = {
+        let value = string_at(config, &["agentRuntime", "visualLocator", "modelAlias"]);
+        if value.trim().is_empty() { "nvidia/LocateAnything-3B".to_string() } else { value }
+    };
+    let context_size = number_at(config, &["agentRuntime", "visualLocator", "contextSize"], 4096).max(1024);
+    let args = vec![
+        "-m".to_string(), model,
+        "--mmproj".to_string(), mmproj,
+        "-ngl".to_string(), gpu_layers,
+        "--special".to_string(),
+        "--alias".to_string(), model_alias,
+        "--host".to_string(), host,
+        "--port".to_string(), port.to_string(),
+        "--ctx-size".to_string(), context_size.to_string(),
+        "--parallel".to_string(), "1".to_string(),
+        "--cache-ram".to_string(), "0".to_string(),
+        "--mmap".to_string(),
+        "--no-warmup".to_string(),
+    ];
+    let mut envs = Vec::new();
+    if let Some(parent) = resolved.parent() {
+        let prior = env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        let value = if prior.is_empty() { parent.to_string_lossy().to_string() } else { format!("{}:{}", parent.to_string_lossy(), prior) };
+        envs.push(("LD_LIBRARY_PATH".to_string(), value));
+    }
+    Ok((resolved.to_string_lossy().to_string(), args, envs))
+}
+
+#[tauri::command]
+fn visual_locator_start(app: AppHandle, state: State<AppState>) -> Result<Value, AppError> {
+    let config = load_config_value()?;
+    if let Some(pid) = managed_child_pid(&state, VISUAL_LOCATOR_KIND)? {
+        return Ok(visual_locator_status_value(&config, true, false, Some(pid), None));
+    }
+    if let Some((pid, cmdline)) = external_visual_locator(&config) {
+        return Ok(visual_locator_status_value(&config, true, true, Some(pid), Some(cmdline)));
+    }
+    let (binary, args, envs) = visual_locator_launch(&config)?;
+    let status = start_child_with_env(app, &state, VISUAL_LOCATOR_KIND, binary, args, envs)?;
+    let pid = status.get("pid").and_then(Value::as_u64).map(|v| v as usize);
+    Ok(visual_locator_status_value(&config, true, false, pid, None))
+}
+
+#[tauri::command]
+fn visual_locator_stop(app: AppHandle, state: State<AppState>) -> Result<Value, AppError> {
+    let config = load_config_value()?;
+    let port = visual_locator_port(&config);
+    for (pid, cmdline) in processes_matching_port(port) {
+        emit_log(&app, VISUAL_LOCATOR_KIND, "stderr", format!("Stopping visual locator on configured port: pid {} ({})", pid, cmdline));
+        kill_external_pid(pid);
+    }
+    let _ = stop_child(app, state, VISUAL_LOCATOR_KIND)?;
+    Ok(visual_locator_status_value(&config, false, false, None, None))
 }
 
 #[tauri::command]
@@ -2797,6 +3220,9 @@ fn main() {
             gateway_stop,
             gateway_status,
             gateway_health,
+            visual_locator_start,
+            visual_locator_stop,
+            visual_locator_status,
             server_start,
             server_stop,
             server_status,
@@ -2810,4 +3236,33 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Atlas Workbench");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_system_prompt_is_first_chat_message() {
+        let config = json!({ "systemPrompt": "  You are Atlas. Be direct.  " });
+        let body = json!({
+            "messages": [
+                { "role": "user", "content": "What model is loaded?" }
+            ]
+        });
+
+        let injected = with_configured_system_prompt(body, &config);
+        let messages = injected.get("messages").and_then(Value::as_array).unwrap();
+
+        assert_eq!(messages[0], json!({ "role": "system", "content": "You are Atlas. Be direct." }));
+        assert_eq!(messages[1], json!({ "role": "user", "content": "What model is loaded?" }));
+    }
+
+    #[test]
+    fn empty_system_prompt_leaves_chat_messages_unchanged() {
+        let config = json!({ "systemPrompt": "   " });
+        let body = json!({ "messages": [{ "role": "user", "content": "Hello" }] });
+
+        assert_eq!(with_configured_system_prompt(body.clone(), &config), body);
+    }
 }

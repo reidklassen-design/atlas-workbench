@@ -111,7 +111,7 @@ describe("ServerTab", () => {
     controller.dispose();
   });
 
-  it("defaults GPU loading to auto-fit and only emits GPU layers for explicit modes", async () => {
+  it("defaults GPU loading to full offload and omits GPU layers only for auto-fit", async () => {
     const saved: AppConfig[] = [];
     const handlers = baselineHandlers({
       "config.save": (args) => {
@@ -121,18 +121,18 @@ describe("ServerTab", () => {
     });
     const { controller } = await renderApp(<ServerTab />, handlers);
 
-    expect(screen.getByTestId("gpu-mode-auto").getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("server-command-preview").textContent).not.toContain("--n-gpu-layers 999");
-
-    fireEvent.click(screen.getByTestId("gpu-mode-full"));
-    await new Promise((r) => setTimeout(r, 10));
-    expect(saved[saved.length - 1].gpu.offloadMode).toBe("full");
+    expect(screen.getByTestId("gpu-mode-full").getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByTestId("server-command-preview").textContent).toContain("--n-gpu-layers 999");
 
     fireEvent.click(screen.getByTestId("gpu-mode-auto"));
     await new Promise((r) => setTimeout(r, 10));
     expect(saved[saved.length - 1].gpu.offloadMode).toBe("auto");
     expect(screen.getByTestId("server-command-preview").textContent).not.toContain("--n-gpu-layers 999");
+
+    fireEvent.click(screen.getByTestId("gpu-mode-full"));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(saved[saved.length - 1].gpu.offloadMode).toBe("full");
+    expect(screen.getByTestId("server-command-preview").textContent).toContain("--n-gpu-layers 999");
     controller.dispose();
   });
 

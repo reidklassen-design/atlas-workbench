@@ -1,7 +1,7 @@
 import { invoke as defaultInvoke, onEvent as defaultOnEvent, type IpcEventName } from "@/ipc/transport";
 import { defaultConfig } from "@/config/defaults";
 import { describeGpuOffload } from "@/process/flagBuilder";
-import type { AgentRuntimeProfile, AppConfig, AppError, FlagValues, GatewayStatus, ProcessLogLine, ProcessStatus, RuntimeHealthProbeResult, SystemMetrics } from "@/config/types";
+import type { AgentRuntimeProfile, AppConfig, AppError, FlagValues, GatewayStatus, ProcessLogLine, ProcessStatus, RuntimeHealthProbeResult, SystemMetrics, VisualLocatorStatus } from "@/config/types";
 
 export interface ListModelsResult {
   directory: string;
@@ -18,6 +18,27 @@ export interface ControllerDeps {
 }
 
 const MAX_LOG_LINES = 2000;
+
+function visualLocatorStatusFromConfig(config: AppConfig): VisualLocatorStatus {
+  const locator = config.agentRuntime.visualLocator;
+  const host = locator.host || "127.0.0.1";
+  const clientHost = host === "0.0.0.0" || host === "::" || host === "*" ? "127.0.0.1" : host.replace(/^\[|\]$/g, "");
+  return {
+    running: false,
+    external: false,
+    state: "stopped",
+    host,
+    port: locator.port,
+    endpoint: `http://${clientHost}:${locator.port}/v1`,
+    modelAlias: locator.modelAlias,
+    serverPath: locator.serverPath,
+    modelPath: locator.modelPath,
+    mmprojPath: locator.mmprojPath,
+    gpuLayers: locator.gpuLayers,
+    contextSize: locator.contextSize,
+    apiKey: locator.apiKey,
+  };
+}
 
 export class AppController {
   config: AppConfig = defaultConfig();
@@ -39,6 +60,7 @@ export class AppController {
     requestCount: 0,
     rejectedCount: 0,
   };
+  visualLocator: VisualLocatorStatus = visualLocatorStatusFromConfig(this.config);
   runtimeHealth: RuntimeHealthProbeResult | null = null;
   errors: AppError[] = [];
   models: ListModelsResult = { directory: "", files: [] };
@@ -138,6 +160,7 @@ export class AppController {
       void this.refreshServerStatus();
       void this.refreshTrainingStatus();
       void this.refreshGatewayStatus();
+      void this.refreshVisualLocatorStatus();
     } catch (err) {
       this.commit({ loaded: true, needsBinarySetup: true });
       this.pushError(err as AppError, () => this.init());
@@ -146,9 +169,9 @@ export class AppController {
 
     this.unsubs.push(
       this.onEvent("log", (payload) => {
-        const line = payload as ProcessLogLine & { kind: "server" | "finetune" };
+        const line = payload as ProcessLogLine & { kind: "server" | "finetune" | "visual-locator" };
         const logLine = { stream: line.stream, text: line.text, ts: line.ts, replaceKey: line.replaceKey };
-        if (line.kind === "server") this.pushLog("serverLogs", logLine);
+        if (line.kind === "server" || line.kind === "visual-locator") this.pushLog("serverLogs", logLine);
         else this.pushLog("trainingLogs", logLine);
       }),
     );
@@ -156,7 +179,21 @@ export class AppController {
       this.onEvent("status", (payload) => {
         const status = payload as ProcessStatus;
         if (status.kind === "server") this.commit({ server: status });
-        else this.commit({ training: status });
+        else if (status.kind === "finetune") this.commit({ training: status });
+        else {
+          this.commit({
+            visualLocator: {
+              ...this.visualLocator,
+              running: status.state === "running" || status.state === "starting",
+              external: false,
+              state: status.state,
+              pid: status.pid,
+              exitCode: status.exitCode,
+              startedAt: status.startedAt,
+              endedAt: status.endedAt,
+            },
+          });
+        }
       }),
     );
     this.unsubs.push(
@@ -231,6 +268,35 @@ export class AppController {
     }
   }
 
+  async applySystemPrompt(systemPrompt: string): Promise<boolean> {
+    const restartGateway = this.gateway.running && !this.gateway.external;
+    const externalGateway = this.gateway.running && this.gateway.external;
+    try {
+      const saved = await this.enqueueSave({ ...this.config, systemPrompt });
+      this.commit({ config: saved });
+      this.pushServerLog(systemPrompt.trim() ? "System prompt saved." : "System prompt cleared.");
+
+      if (restartGateway) {
+        this.pushServerLog("Restarting Atlas Gateway so the system prompt applies to chat requests.");
+        const stopped = await this.invoke<GatewayStatus>("gateway.stop");
+        this.commit({ gateway: stopped });
+        const started = await this.invoke<GatewayStatus>("gateway.start");
+        this.commit({ gateway: started });
+        this.pushServerLog(`Atlas Gateway restarted at http://${started.host}:${started.port}/v1.`);
+      } else if (externalGateway) {
+        this.pushServerLog("System prompt saved. The always-on Atlas Gateway will use it on the next chat request.");
+      }
+
+      if (!restartGateway && !externalGateway) {
+        this.pushServerLog("System prompt will apply on the next Atlas Gateway chat request.");
+      }
+      return true;
+    } catch (err) {
+      this.pushError(err as AppError, () => this.applySystemPrompt(systemPrompt));
+      return false;
+    }
+  }
+
   async applyAgentProfile(profileId: string): Promise<boolean> {
     try {
       const saved = await this.invoke<AppConfig>("runtime.applyProfile", { profileId });
@@ -249,6 +315,9 @@ export class AppController {
       const status = await this.invoke<GatewayStatus>("gateway.start");
       this.commit({ gateway: status });
       this.pushServerLog(`Atlas Gateway ${status.external ? "already reachable" : "listening"} at http://${status.host}:${status.port}/v1 for ${status.modelAlias}.`);
+      if (this.config.agentRuntime.visualLocator.enabled && this.config.agentRuntime.visualLocator.autoStartWithGateway) {
+        void this.startVisualLocator();
+      }
       return true;
     } catch (err) {
       this.pushError(err as AppError, () => this.startGateway());
@@ -285,6 +354,40 @@ export class AppController {
       return health;
     } catch (err) {
       this.pushError(err as AppError, () => this.refreshRuntimeHealth());
+      return null;
+    }
+  }
+
+  async startVisualLocator(): Promise<boolean> {
+    try {
+      const status = await this.invoke<VisualLocatorStatus>("visualLocator.start");
+      this.commit({ visualLocator: status });
+      this.pushServerLog(`Visual locator ${status.external ? "already reachable" : "started"} at ${status.endpoint} for ${status.modelAlias}.`);
+      return true;
+    } catch (err) {
+      this.pushError(err as AppError, () => this.startVisualLocator());
+      return false;
+    }
+  }
+
+  async stopVisualLocator(): Promise<boolean> {
+    try {
+      const status = await this.invoke<VisualLocatorStatus>("visualLocator.stop");
+      this.commit({ visualLocator: status });
+      this.pushServerLog("Visual locator stopped.");
+      return true;
+    } catch (err) {
+      this.pushError(err as AppError, () => this.stopVisualLocator());
+      return false;
+    }
+  }
+
+  async refreshVisualLocatorStatus(): Promise<VisualLocatorStatus | null> {
+    try {
+      const status = await this.invoke<VisualLocatorStatus>("visualLocator.status");
+      this.commit({ visualLocator: status });
+      return status;
+    } catch {
       return null;
     }
   }
@@ -441,13 +544,16 @@ export class AppController {
     const pids: { pid: number; name: string }[] = [];
     if (this.server.state === "running" && this.server.pid) pids.push({ pid: this.server.pid, name: "llama-server" });
     if (this.training.state === "running" && this.training.pid) pids.push({ pid: this.training.pid, name: "llama-finetune" });
+    if (this.visualLocator.running && this.visualLocator.pid) pids.push({ pid: this.visualLocator.pid, name: "LocateAnything" });
     try {
-      const [metrics, gateway] = await Promise.all([
+      const [metrics, gateway, visualLocator] = await Promise.all([
         this.invoke<SystemMetrics>("monitor.collect", { pids }),
         this.invoke<GatewayStatus>("gateway.status").catch(() => null),
+        this.invoke<VisualLocatorStatus>("visualLocator.status").catch(() => null),
       ]);
       this.metrics = metrics;
       if (gateway) this.gateway = gateway;
+      if (visualLocator) this.visualLocator = visualLocator;
       this.notify();
       return metrics;
     } catch (err) {

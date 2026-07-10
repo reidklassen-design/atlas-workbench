@@ -22,10 +22,10 @@ export function LogPanel({ logs, onClear, emptyText = "Waiting for output…" }:
 
   return (
     <div className="card flex flex-col">
-      <div className="flex items-center justify-between border-b border-slate-700/60 px-3 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Log</span>
+      <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+        <span className="section-kicker">Log</span>
         {onClear ? (
-          <button type="button" className="text-xs text-slate-400 hover:text-slate-200" onClick={onClear}>
+          <button type="button" className="rounded px-2 py-1 text-xs text-slate-400 transition hover:bg-white/[0.06] hover:text-slate-200" onClick={onClear}>
             Clear
           </button>
         ) : null}
